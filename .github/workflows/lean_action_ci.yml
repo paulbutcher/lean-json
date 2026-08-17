@@ -11,4 +11,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      - name: No Lean package imports in the library
+        run: ./scripts/check-imports.sh
+
+      # Installs the toolchain and builds the library. Warnings fail the build via
+      # `warningAsError` in the lakefile, so no build flag is needed here.
       - uses: leanprover/lean-action@v1
+
+      # Run the tests explicitly rather than relying on the action's defaults. The root
+      # test driver spawns the test subproject, which carries the test-only dependencies.
+      - name: Run tests
+        run: lake test
