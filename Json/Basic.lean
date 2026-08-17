@@ -185,6 +185,27 @@ end
 /-- `uniqueKeys` as a proposition, decidable by construction. -/
 abbrev UniqueKeys (j : Json) : Prop := uniqueKeys j = true
 
+mutual
+
+/-- Every number in the value is in canonical form, which is what the parser guarantees. -/
+def canonicalNumbers : Json → Bool
+  | num n => decide n.Canonical
+  | arr elems => canonicalNumbersList elems.toList
+  | obj fields => canonicalNumbersFields fields.toList
+  | _ => true
+
+def canonicalNumbersList : List Json → Bool
+  | [] => true
+  | j :: rest => canonicalNumbers j && canonicalNumbersList rest
+
+def canonicalNumbersFields : List (String × Json) → Bool
+  | [] => true
+  | (_, v) :: rest => canonicalNumbers v && canonicalNumbersFields rest
+
+end
+
+abbrev CanonicalNumbers (j : Json) : Prop := canonicalNumbers j = true
+
 def getBool? : Json → Except String Bool
   | bool b => .ok b
   | _ => .error "expected a boolean"

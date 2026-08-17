@@ -6,12 +6,13 @@ import Test.Runner
 import Test.Number
 import Test.Basic
 import Test.Spec
+import Test.Parser
 
 namespace Test
 
 -- Each test module contributes its cases here. Modules that consist only of
 -- theorems need no entry: compiling them is passing.
 def all : Array TestCase :=
-  Test.Number.all ++ Test.Basic.all
+  Test.Number.all ++ Test.Basic.all ++ Test.Parser.all
 
 end Test

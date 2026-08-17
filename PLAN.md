@@ -199,6 +199,16 @@ parser. Combinator recursion is what reaches SIGABRT in core, and it would also 
 well-founded recursion proof per combinator; one loop over remaining bytes gives termination
 almost free and bounds depth by heap rather than stack.
 
+**Input representation, and a measured cost.** The machine scans a `List Char`, which mirrors
+`Spec` exactly and so keeps the soundness proof within reach. It is paid for in memory: `parse`
+converts the whole text up front, and a 20MB document was measured at 734MB peak resident, about
+37 bytes per character. Throughput is 3.4x slower than `Lean.Data.Json` on the same 3.4MB document,
+284ms against 83ms, and scales linearly. The behaviour on adversarial nesting is right, ten million
+deep yielding `depthExceeded` in 619ms where core aborts, but the amplification is itself a denial
+of service vector on large bodies and has to go before v1. The fix is to scan the `String` by
+index rather than convert it, which changes no theorem statement, since every statement is written
+against `Spec` rather than against the scanner.
+
 `Config` carries `duplicateKeys := .reject`, `maxDepth := some 1024`,
 `maxNumberDigits := some 1000`, and BOM handling, which ignores a leading `U+FEFF` per D18.
 Both limits accept `none`, which is safe because the parser is stack-safe by construction, and
@@ -320,6 +330,14 @@ version of the `isLt` property passed against a deliberately broken mantissa ali
 independently drawn exponents almost never place two numbers at the same leading digit position.
 Every property should be confronted with a mutation it ought to catch.
 
+**No property is trusted until a mutation has failed it.** That rule has now caught two useless
+properties. In Phase 1 the `isLt` property was blind to a broken alignment; in Phase 4 the first
+duplicate-name property was assembled from random tokens and passed against a parser whose
+duplicate check had been deleted, because random tokens form parseable JSON far too rarely to
+reach the check. Generators must build well-formed input by construction and draw from an
+alphabet small enough that the interesting collisions actually occur, and the mutation test is
+what demonstrates they do.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
@@ -334,6 +352,8 @@ No open questions. Work deliberately postponed:
   depends on the parser's depth bound. See the note under constraint 4.
 - **Proofs for `dedupKeys`,** which want a small library of `Array.foldl` characterisation
   lemmas that would also serve the parser and printer proofs.
+- **Index-based scanning in the parser,** to remove the 37x memory amplification measured in
+  section 6. This is a v1 blocker, not a nicety.
 
 ## 13. Build order
 
@@ -389,9 +409,22 @@ No open questions. Work deliberately postponed:
       deterministic in its remainder
 
 **Phase 4. Parser**
-- [ ] `Config`, `Error`, the state machine, `parse` and `parseBytes`
-- [ ] Soundness, `Canonical`, `UniqueKeys`
-- [ ] Depth, digit-count, and duplicate-detection guards
+- [x] `Config` (duplicate keys, `maxDepth`, `maxNumberDigits`, BOM), structured `Error` with a
+      character offset, and `ErrorKind`
+- [x] Leaf scanners: whitespace, strings with escapes and surrogate pairs, and numbers, each
+      carrying its own consumption proof so termination needs no separate lemmas
+- [x] The machine: `value`, `continueWith` and `member` over an explicit `Frame` stack, so nesting
+      costs heap rather than C stack
+- [x] `parse` and `parseBytes`, the latter enforcing RFC 8259 section 8.1 through
+      `String.fromUTF8?`
+- [x] Depth, digit-count and duplicate-name guards, each with a test
+- [x] 68 behavioural tests: 26 accepted, 29 rejected, 5 adversarial, 4 properties, the last of
+      these each confirmed by a mutation that ought to fail it
+- [ ] Soundness against `Spec`. This needs an invariant relating a machine state, meaning the
+      frame stack plus the remaining text, to a partial derivation. The leaf scanners can be
+      proved sound first and independently, which is where to start
+- [ ] `CanonicalNumbers` and `UniqueKeys` of parser output are property-tested, not proved. Both
+      follow from the machine invariant above, so they are the same piece of work
 
 **Phase 5. Printer**
 - [ ] `compress`, `pretty`, escaping, number rendering
