@@ -181,8 +181,7 @@ Json/Number.lean         Number, Canonical, Eqv, Ord, bounded conversions
 Json/Spec.lean           RFC 8259 grammar as an inductive Prop
 Json/Parser.lean         iterative parser, Config, structured Error
 Json/Parser/Lemmas.lean  soundness, completeness, UniqueKeys
-Json/Printer.lean        compress, pretty, escaping
-Json/Printer/Lemmas.lean well-formedness, round trip, UTF-8 validity
+Json/Printer.lean        compress, pretty, escaping, number rendering
 Json/Query.lean          total accessors, path lookup, merge, update
 Json/FromTo.lean         ToJson / FromJson classes, instances, helpers
 Json/Stream.lean         IO.FS.Stream helpers
@@ -221,14 +220,25 @@ size threshold for duplicate detection, so adversarially wide objects stay linea
 
 ## 7. Printer
 
-`compress` and `pretty` share one explicit work-stack traversal. Output accumulates as bytes
-with `IsValidUTF8` maintained alongside, so there is no unchecked construction step. Escaping
-is table-driven over bytes.
+`compress` and `pretty` share one explicit work-stack traversal, `render`, over a list of
+`Item`s: literal text, a value at a depth, or the remaining elements or members of a container
+that has been entered. Every step retires one item and pushes at most two smaller ones, so the
+termination measure decreases locally and nesting costs heap rather than C stack. Output
+accumulates in a `String`, which makes UTF-8 validity a property of the type rather than
+something to maintain by hand.
 
-Number rendering expands to plain decimal only while the digit count stays under a bound, and
-otherwise emits exponent notation, so `⟨1,2⟩` renders as `100` while `⟨1,1000000000⟩` renders
-as `1e1000000000`. Round tripping holds either way, since both spellings normalise back to the
-same canonical value.
+Number rendering expands to plain decimal only while the padding stays within
+`plainZeroLimit`, and otherwise emits exponent notation, so `⟨1,2⟩` renders as `100` while
+`⟨1,1000000000⟩` renders as `1e1000000000`. Round tripping holds either way, since both
+spellings normalise back to the same canonical value.
+
+**Two descriptions of the same text.** The work stack is what keeps printing safe, but it
+relates output to input only through a loop invariant. So the text is described a second time
+by structural recursion on the value, `chars`, and the two are proved equal:
+`(render st items acc).toList = acc.toList ++ itemsChars st items`. The grammar theorems are
+then stated about `chars`, where induction follows the shape of the value. The reference
+version is proof-only and never runs, which is just as well, since it is the C-stack recursion
+the printer exists to avoid.
 
 ## 8. Specification and theorems
 
@@ -261,12 +271,13 @@ Spec.Value bs j → ¬UniqueKeys j → (parse .reject bs).isError
 -- the grammar transcription is unambiguous, which validates the spec itself
 Spec.Value bs j₁ → Spec.Value bs j₂ → j₁ = j₂
 
--- output is always well formed, and always a valid Lean String
-Spec.Value (renderBytes j) j
-(renderBytes j).IsValidUTF8
+-- output is always well formed, and always valid UTF-8. Proved
+CanonicalNumbers j → Spec.TextOf (compress j) j
+CanonicalNumbers j → Spec.TextOf (pretty j indent) j
+s.toByteArray.IsValidUTF8
 
--- round trip, for both compress and pretty
-Canonical j → parse cfg (render j) = .ok j
+-- round trip, for both compress and pretty. Waits on completeness, so property-tested
+CanonicalNumbers j → parse cfg (render j) = .ok j
 
 -- numbers
 Canonical a → Canonical b → (Eqv a b ↔ a = b)
@@ -297,12 +308,12 @@ Tracked against `Lean.Data.Json` so that "same functionality" is checkable rathe
 aspirational.
 
 - [ ] `Number`: `toString`, `Ord`, `Neg`, `OfScientific`, `OfNat`, shifts, `toFloat`,
-      `ofFloat?`, bounded `toInt?` / `toNat?`
-- [ ] `Json`: `DecidableEq`, `Hashable`, `Inhabited`, `Repr`, coercions, `mkObj`, `isNull`
+      `ofFloat?`, bounded `toInt?` / `toNat?` — all but `ofFloat?`
+- [x] `Json`: `DecidableEq`, `Hashable`, `Inhabited`, `Repr`, coercions, `mkObj`, `isNull`
 - [ ] Accessors: `getObj?`, `getArr?`, `getStr?`, `getNat?`, `getInt?`, `getBool?`, `getNum?`,
       `getObjVal?`, `getArrVal?`, `getObjValD`, `setObjVal`, `mergeObj`, `Structured`
-- [ ] `parse`, `parseBytes`
-- [ ] `compress`, `pretty`, `escape`, `renderString`, `ToString`
+- [x] `parse`, `parseBytes`
+- [x] `compress`, `pretty`, `escape`, `renderString`, `ToString`
 - [ ] `FromJson` / `ToJson` plus instances: `Json`, `Number`, `Unit`, `Empty`, `Bool`, `Nat`,
       `Int`, `String`, `String.Slice`, `FilePath`, `Array`, `List`, `Option`, `Prod`, `USize`,
       `UInt64`, `Float`, `Structured`, `Std.TreeMap String`
@@ -330,13 +341,22 @@ version of the `isLt` property passed against a deliberately broken mantissa ali
 independently drawn exponents almost never place two numbers at the same leading digit position.
 Every property should be confronted with a mutation it ought to catch.
 
-**No property is trusted until a mutation has failed it.** That rule has now caught two useless
-properties. In Phase 1 the `isLt` property was blind to a broken alignment; in Phase 4 the first
-duplicate-name property was assembled from random tokens and passed against a parser whose
-duplicate check had been deleted, because random tokens form parseable JSON far too rarely to
-reach the check. Generators must build well-formed input by construction and draw from an
-alphabet small enough that the interesting collisions actually occur, and the mutation test is
-what demonstrates they do.
+**No property is trusted until a mutation has failed it.** That rule has now caught three
+useless properties. In Phase 1 the `isLt` property was blind to a broken alignment; in Phase 4
+the first duplicate-name property was assembled from random tokens and passed against a parser
+whose duplicate check had been deleted, because random tokens form parseable JSON far too rarely
+to reach the check; in Phase 5 the round-trip properties survived a printer that put the decimal
+point in the wrong place, because the generated numbers almost never had more digits than the
+exponent asked for, so the branch that positions the point was hardly ever reached. Generators
+must build well-formed input by construction, draw from an alphabet small enough that the
+interesting collisions occur, and be shaped so that every branch of the code under test is
+reachable. The mutation test is what demonstrates they are.
+
+The rule extends to proofs, where it answers a different question: not whether the property has
+teeth, but whether the theorem constrains the implementation that ships. Breaking `render` so
+that `true` prints as `TRUE`, and `escapeCharTo` so that a backspace escapes as `\B`, each
+fails a proof rather than a test, which is the evidence that the structural description the
+grammar theorems talk about is tied to the traversal that actually runs.
 
 ## 12. Deferred
 
@@ -376,7 +396,7 @@ No open questions. Work deliberately postponed:
 - [x] `Ord` in O(digits), with the equality case proved exact and `LawfulBEq` confirmed. See the
       revision to D3: `LawfulEqCmp` is unattainable and is not claimed
 - [x] Bounded conversions: `toInt?`, `toNat?`, `toFloat`, all guarded against exponent expansion
-- [ ] `toString` deferred to Phase 5, where the rendering rule belongs
+- [x] `toString`, landed in Phase 5 where the rendering rule belongs
 - [ ] `ofFloat?` deferred to Phase 6, since it decodes a float's decimal spelling and so wants
       the parser
 - [ ] The scale comparison inside `isLt` is covered by two properties rather than proved. Closing
@@ -427,8 +447,22 @@ No open questions. Work deliberately postponed:
       follow from the machine invariant above, so they are the same piece of work
 
 **Phase 5. Printer**
-- [ ] `compress`, `pretty`, escaping, number rendering
-- [ ] Well-formedness, UTF-8 validity, round tripping for both forms
+- [x] `Number.toString`, `escape`, `renderString`, `compress`, `pretty`, `ToString` for both
+      types, over one work-stack traversal
+- [x] Agreement between that traversal and a structural description of the same text, so the
+      grammar theorems can be proved by induction on the value
+- [x] Well-formedness, proved: `CanonicalNumbers j → Spec.TextOf (compress j) j`, and the same
+      for `pretty`, by way of `Spec.Num`, `Spec.Str` and the whitespace and token productions.
+      The digit machinery goes through a `digitsValue` characterisation of a run of digit
+      characters, which turns the fraction split into `digitsValue (l₁ ++ l₂)` arithmetic
+- [x] UTF-8 validity, from `String.utf8Encode_toList`: the output is a `String`, so its bytes
+      are the UTF-8 encoding of its characters and RFC 8259 section 8.1 holds by construction
+- [x] 34 behavioural tests: number rendering by branch, escaping, layout for both forms, a
+      100,000 deep value printed without a crash, and three round-trip properties, each
+      confirmed by a mutation that ought to fail it
+- [ ] Round tripping stays a property rather than a theorem, since `parse (render j) = .ok j`
+      needs parser completeness, which is deferred per D14. Well-formedness is the half that
+      does not depend on it
 
 **Phase 6. Codecs**
 - [ ] `FromJson` / `ToJson`, instances, helpers, `parseTagged` and friends

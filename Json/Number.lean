@@ -191,6 +191,11 @@ theorem eqv_iff_normalize_eq {a b : Number} :
 instance (a b : Number) : Decidable (Eqv a b) :=
   decidable_of_iff _ eqv_iff_normalize_eq.symm
 
+/-- A canonical number is its own normal form. -/
+theorem normalize_eq_self {n : Number} (h : Canonical n) :
+    normalize n.mantissa n.exponent = n :=
+  (eqv_iff_eq (canonical_normalize _ _) h).mp (eqv_normalize _ _)
+
 /-- `mantissa * 10 ^ exponent` for an integer, in canonical form. -/
 def ofInt (m : Int) : Number := normalize m 0
 
