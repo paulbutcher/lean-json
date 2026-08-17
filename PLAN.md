@@ -61,10 +61,18 @@ saw `"roles": ["_admin"]`.
   values. Round-trip theorems take `Canonical` as a hypothesis, discharged from
   `Canonical (parse t)`.
 - **D3. Structural equality is the only equality.** With D1 and D2, `=`, `==`, `compare`, and
-  `hash` all coincide with numeric value, so `LawfulBEq` and `LawfulEqCmp` hold. Numeric
-  equivalence is a separate `Prop`, `Eqv`, with `Canonical a → Canonical b → (Eqv a b ↔ a = b)`
-  as the theorem that justifies the whole arrangement. An unlawful numeric `BEq` was rejected:
-  it would make every theorem, which is stated with `=`, stop covering the `==` that callers use.
+  `hash` all coincide with numeric value *on canonical values*, which is everything the parser
+  produces. Numeric equivalence is a separate `Prop`, `Eqv`, with
+  `Canonical a → Canonical b → (Eqv a b ↔ a = b)` as the theorem that justifies the whole
+  arrangement. An unlawful numeric `BEq` was rejected: it would make every theorem, which is
+  stated with `=`, stop covering the `==` that callers use.
+  `LawfulBEq Number` holds unconditionally, since `==` comes from the derived `DecidableEq`.
+  **`LawfulEqCmp` does not hold and no such instance is declared**: `Ord` compares numerically,
+  so `⟨15,1⟩` and `⟨150,2⟩` compare equal while differing structurally. D2 makes non-canonical
+  values representable, so no numeric-order `Ord` can be lawful, and claiming otherwise would
+  reproduce exactly the incoherence found in `Lean.Data.Json`. What is proved instead is
+  `cmp a b = .eq ↔ Eqv a b` unconditionally, plus the canonical corollary
+  `Canonical a → Canonical b → (cmp a b = .eq ↔ a = b)`.
 - **D4. No text-exact round tripping.** Value-level fidelity only. `-0` normalises to `0`,
   `1.50` to `1.5`, and `100` and `1e2` to the same value. Consequence to keep in view:
   `{"a":0,"a":-0}` becomes an exact same-key-same-value duplicate.
@@ -283,6 +291,14 @@ Layers: the theorem set from section 8; properties for round tripping, parser an
 agreement, and accessor laws; an accept/reject conformance corpus; fuzzing for the crash-freedom
 claim that proofs cannot reach; and the regression cases from section 2.
 
+Two practical notes from Phase 1. `decide` cannot evaluate anything defined by well-founded
+recursion, since such definitions do not reduce in the kernel, but `simp` with the generated
+equation lemmas can, so concrete input and output claims still reach theorem strength rather
+than falling back to runtime checks. And properties want their generators checked: the first
+version of the `isLt` property passed against a deliberately broken mantissa alignment, because
+independently drawn exponents almost never place two numbers at the same leading digit position.
+Every property should be confronted with a mutation it ought to catch.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
@@ -306,10 +322,20 @@ No open questions. Work deliberately postponed:
 - [x] CI: `lake build` and `lake test`, warnings as errors, lint for `import Lean`
 
 **Phase 1. Numbers**
-- [ ] `Number`, `Canonical`, `Eqv`, normalisation from digit text
-- [ ] `Canonical a → Canonical b → (Eqv a b ↔ a = b)`
-- [ ] `Ord` in O(digits), `LawfulEqCmp`, `Hashable` coherence
-- [ ] Bounded conversions and their guards
+- [x] `Number`, `Canonical`, `Eqv`, `scaleTo`
+- [x] `Canonical a → Canonical b → (Eqv a b ↔ a = b)`
+- [x] `Eqv` is an equivalence relation, and decidable via `eqv_iff_normalize_eq`
+- [x] `normalize`, with `Canonical (normalize m e)` and `Eqv (normalize m e) ⟨m, e⟩`
+- [x] Constructors: `ofInt`, `ofNat`, `OfNat`, `OfScientific`, `Neg`, `mulPow10`, each with its
+      canonicity lemma
+- [x] `Ord` in O(digits), with the equality case proved exact and `LawfulBEq` confirmed. See the
+      revision to D3: `LawfulEqCmp` is unattainable and is not claimed
+- [x] Bounded conversions: `toInt?`, `toNat?`, `toFloat`, all guarded against exponent expansion
+- [ ] `toString` deferred to Phase 5, where the rendering rule belongs
+- [ ] `ofFloat?` deferred to Phase 6, since it decodes a float's decimal spelling and so wants
+      the parser
+- [ ] The scale comparison inside `isLt` is covered by two properties rather than proved. Closing
+      it needs digit-count bounds, `10 ^ (digitCount m - 1) ≤ m.natAbs < 10 ^ digitCount m`
 
 **Phase 2. Core type**
 - [ ] `Json`, instances, coercions, `UniqueKeys`
