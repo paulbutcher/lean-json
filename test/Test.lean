@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 import Test.Runner
 import Test.Number
 import Test.Basic
+import Test.Spec
 
 namespace Test
 

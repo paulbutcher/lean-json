@@ -222,13 +222,26 @@ same canonical value.
 
 ## 8. Specification and theorems
 
-`Json/Spec.lean` transcribes the RFC 8259 ABNF as `Spec.Value : List UInt8 → Json → Prop`,
-written to be read against the RFC rather than to suit the parser.
+`Json/Spec.lean` transcribes the RFC 8259 ABNF, written to be read against the RFC rather than to
+suit the parser. Two choices made when it was written:
+
+**The alphabet is `Char`, not `UInt8`.** The RFC states the string productions in code points, and
+D10 means the byte level is already covered by a verified decoder, so the spec stays at the level
+the RFC is written in and the `ByteArray` entry point composes `String.fromUTF8?` in front of it.
+A welcome consequence: D8 stops being a rule imposed on the grammar and becomes a property of the
+alphabet, since no `Char` carries a surrogate code point, so a lone `\uD800` escape denotes
+nothing. That is one of the two rejection proofs in the tests.
+
+**Each relation threads a remainder**, as `Value : List Char → Json → List Char → Prop`, rather
+than using existentially quantified concatenations. It makes both construction and inversion
+tractable. It also means the relations are deliberately *not* deterministic in that remainder,
+exactly as the ABNF is not: `12` derives as `1` with `2` left over. Determinism is a property of
+`Text`, where the remainder must be empty, and proving it is the outstanding Phase 3 item.
 
 ```lean
 -- soundness: no false accepts, in every mode. Stated modulo the BOM, per D18,
 -- since the grammar has no BOM production
-parse cfg bs = .ok j → Spec.Value (stripBOM bs) j
+parse cfg s = .ok j → Spec.Text (stripBOM s).toList j
 
 -- completeness, per duplicate-key policy. v2, per D14
 Spec.Value bs j → parse .allow bs = .ok j
@@ -365,8 +378,15 @@ No open questions. Work deliberately postponed:
       needs, `(l.map sizeOf).sum < sizeOf l`, is proved out and ready to use
 
 **Phase 3. Specification**
-- [ ] `Spec.Value` transcribed from the ABNF
-- [ ] Unambiguity theorem
+- [x] Every production of RFC 8259 section 2 transcribed: `Ws`, `Token`, `Digits`, `Int'`,
+      `Frac`, `Exp`, `Sign`, `Num`, `Hex4`, `Ch`, `Chars`, `Str`, `Value`, `Arr`, `Elements`,
+      `Object`, `Members`, `Member`, and `Text`
+- [x] Eleven derivations built by hand as validation, covering whitespace, both number forms,
+      escapes, a surrogate pair, empty and populated arrays and objects, and nesting
+- [x] Two rejection proofs, that `"\ud800"` and `01` denote nothing, with the three inversion
+      lemmas they need
+- [ ] Unambiguity theorem. See the note below on why the relation is deliberately not
+      deterministic in its remainder
 
 **Phase 4. Parser**
 - [ ] `Config`, `Error`, the state machine, `parse` and `parseBytes`
