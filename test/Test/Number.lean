@@ -12,7 +12,8 @@ namespace Test.Number
 
 -- `decide` cannot evaluate these definitions, since well-founded recursion does not reduce in
 -- the kernel, but their equation lemmas let `simp` do it.
-attribute [local simp] normalize normalizeAux digitCount digitCount.go ofInt cmp isLt toInt? toNat?
+attribute [local simp] normalize normalizeAux digitCount digitCount.go Number.ofInt cmp isLt
+  toInt? toNat?
 
 example : LawfulBEq Json.Number := inferInstance
 
@@ -25,7 +26,7 @@ example : normalize (-1500) 3 = ⟨-15, 5⟩ := by simp
 example : normalize 0 7 = ⟨0, 0⟩ := by simp
 
 -- `-0` and `0` denote the same value, as do `100` and `1e2`.
-example : ofInt (-0) = ofInt 0 := by simp
+example : Number.ofInt (-0) = Number.ofInt 0 := by simp
 
 example : cmp ⟨1, 2⟩ ⟨100, 0⟩ = .eq := by simp
 

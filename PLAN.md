@@ -24,6 +24,14 @@ supersede it rather than editing history. Check items off in the build order as 
    Warnings are errors.
 4. **Stack safety by construction.** Every operation whose input can be deeply nested uses
    an explicit heap-allocated work stack, never recursion on the C stack.
+
+   As of Phase 2 this holds for the default path but not universally. `beq`, `hash` and
+   `uniqueKeys` recurse, and what protects them is `maxDepth`: a value obtained from `parse`
+   under the default configuration is depth-bounded, so recursing over it cannot overflow. A
+   value built programmatically, or parsed with `maxDepth := none`, can be arbitrarily deep,
+   and those three are then at risk. Replacing them with work-stack versions is tracked in
+   section 12, and no downstream statement changes when they are, because every theorem is
+   stated about `=` rather than about `beq`.
 5. **New module system.** Both packages use `module` with explicit `public import` /
    `meta import`. This is what gives constraint 2 its teeth.
 
@@ -309,6 +317,10 @@ No open questions. Work deliberately postponed:
   let `maxNumberDigits := none` be the default rather than a documented hazard, retiring D21.
 - **Reference-counted teardown of deeply nested values,** which is a runtime recursion risk
   that no theorem of ours covers. Phase 9 establishes empirically whether it bites.
+- **Work-stack versions of `beq`, `hash` and `uniqueKeys`,** so that stack safety no longer
+  depends on the parser's depth bound. See the note under constraint 4.
+- **Proofs for `dedupKeys`,** which want a small library of `Array.foldl` characterisation
+  lemmas that would also serve the parser and printer proofs.
 
 ## 13. Build order
 
@@ -338,9 +350,19 @@ No open questions. Work deliberately postponed:
       it needs digit-count bounds, `10 ^ (digitCount m - 1) ≤ m.natAbs < 10 ^ digitCount m`
 
 **Phase 2. Core type**
-- [ ] `Json`, instances, coercions, `UniqueKeys`
-- [ ] Total accessors and `mergeObj`, last-wins lookup with its agreement-with-dedup proof
-- [ ] Stack-safe traversal primitive that later phases build on
+- [x] `Json`, coercions, `mkObj`, `isNull`
+- [x] `beq` with `beq a b = true ↔ a = b` proved, giving `DecidableEq`, `BEq` and `LawfulBEq`.
+      No deriving handler applies to either nested `Array` position, so equality, hashing and the
+      key check are each a mutual group over `List`
+- [x] `Hashable`
+- [x] `uniqueKeys` and `UniqueKeys`, recursive through the whole value
+- [x] Total accessors, `getObjVal?` resolving duplicates last-wins, `setObjVal?` replacing in
+      place, `mergeObj` via `dedupKeys`
+- [ ] `dedupKeys` correctness is covered by three properties, not proved. Both claims need a
+      characterisation of `findLast?` over `Array.foldl` first, and there is no lemma library for
+      array folds to build on yet
+- [ ] Stack-safe traversal primitive. See the note on constraint 4 below; the termination lemma it
+      needs, `(l.map sizeOf).sum < sizeOf l`, is proved out and ready to use
 
 **Phase 3. Specification**
 - [ ] `Spec.Value` transcribed from the ABNF
