@@ -46,6 +46,12 @@ example := @Json.Number.canonical_ofFloat
 example := @Json.Number.cmp_eq_eq_iff_eq
 example := @Json.Number.toInt?_ofInt
 
+example := @Json.Parser.remaining_startPos
+example := @Json.Parser.remaining_step
+example := @Json.Parser.ws_skipWs
+example := @Json.Parser.number_sound
+example := @Json.Parser.str_sound
+
 example := @Json.Printer.textOf_compress
 example := @Json.Printer.textOf_pretty
 example := @Json.Printer.spec_renderString

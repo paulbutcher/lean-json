@@ -140,10 +140,13 @@ proof of your own can cite it: `Json.get?_set?`, `Json.findLast?_dedupKeys`,
 
 Not proved, and covered by tests instead:
 
-- **Parser soundness against the grammar.** It needs an invariant relating a machine state to a
-  partial derivation, and it is the next substantial piece of proof work. In the meantime the
-  parser is held to 318 files of the JSONTestSuite conformance corpus, two 3,000 round fuzz
-  sweeps, and a suite of behavioural tests.
+- **Parser soundness against the grammar**, in part. Every leaf is proved: whitespace, the three
+  literals, each part of a number, and a string with its escapes, surrogate pairs and code points,
+  all stated against the productions of `Json.Spec` by way of `remaining`, the characters left at a
+  position. What is left is the machine, which needs an invariant relating the frame stack and the
+  remaining text to a partial derivation. Until that lands the parser as a whole is held to 318
+  files of the JSONTestSuite conformance corpus, two 3,000 round fuzz sweeps, and a suite of
+  behavioural tests.
 - **Completeness, meaning no false rejects.** The corpus is the evidence, not a theorem.
 - **Round tripping through text**, `parse (render j) = .ok j`, which needs completeness, so it is
   property-tested and corpus-tested. `Float` is the one codec whose round trip is a property

@@ -232,7 +232,8 @@ Json/Basic.lean          Json, constructors, instances, UniqueKeys, field and de
 Json/Number.lean         Number, Canonical, Eqv, Ord, bounded conversions
 Json/Spec.lean           RFC 8259 grammar as an inductive Prop
 Json/Parser.lean         iterative parser, Config, structured Error
-Json/Parser/Lemmas.lean  soundness, completeness, UniqueKeys
+Json/Parser/Soundness.lean
+                         the position-to-characters bridge, leaf and machine soundness
 Json/Printer.lean        compress, pretty, escaping, number rendering
 Json/Printer/Soundness.lean
                          output is JSON text, output is valid UTF-8
@@ -285,6 +286,21 @@ frame and a step object stayed live for every character until the closing quotat
 loop the same document costs 16MB, and reading it is a third faster. The benchmark is what found
 this: the document was added precisely because it is nearly all text and almost no value, which
 is the shape that isolates what the scanner costs.
+
+**Proofs stay out of the data the scanner returns.** `StringStep` first carried its own progress
+proof, one field per constructor, which made `string`'s termination argument a line long. It also
+made the step uncaseable: every tactic that takes the definition apart, `split`, `fun_cases` or
+`injection`, has to carry those proof terms through the motive, and the elaborator and then the
+kernel run out of recursion depth on a term that size. The step now returns the character and the
+position alone, with two theorems saying that a step which is not a failure moves on, and
+`string` cites them where it used to read a field. The lesson is general: a proof inside a value
+is a proof every case analysis of that value has to drag along.
+
+**The bridge to the grammar is `remaining`,** the characters left at a position, defined as the
+suffix a position splits the text into. Core's `String.Pos.Splits` gives the two facts everything
+rests on: at the start the suffix is the whole text, and one step takes exactly one character off
+the front. So a scanner stated over positions is proved against a grammar stated over lists
+without either side bending to the other, and without an axiom about strings.
 
 Errors carry a byte offset, which is what a position gives directly; a character offset would have
 to be counted separately, and byte offsets are what a caller indexes the input with anyway.
@@ -345,6 +361,11 @@ exactly as the ABNF is not: `12` derives as `1` with `2` left over. Determinism 
 -- soundness: no false accepts, in every mode. Stated modulo the BOM, per D18,
 -- since the grammar has no BOM production
 parse cfg s = .ok j → Spec.Text (stripBOM s).toList j
+
+-- the leaves of that, proved, over `remaining p`, the characters left at a position
+Spec.Ws (remaining p) (remaining (skipWs p).pos)
+number cfg p = .ok r → Spec.Num (remaining p) r.value (remaining r.pos)
+step? p = some ('"', q) → string q "" = .ok r → Spec.Str (remaining p) r.value (remaining r.pos)
 
 -- completeness, per duplicate-key policy. v2, per D14
 Spec.Value bs j → parse .allow bs = .ok j
@@ -515,6 +536,18 @@ names every theorem the README tells a caller about, so making one private, rena
 it back beside the tests fails the build. Marking `get?_set?` private is the mutation that
 demonstrates it, and nothing else in the suite notices that change.
 
+The leaf soundness proofs were confronted the same way, and the answer is more interesting than a
+row of ticks. Whitespace that also skips a comma fails `ws_skipWs`, since `Spec.Ws` admits four
+characters and not five, and it also fails twenty-one tests. A leading zero read as an ordinary
+digit fails `intPart_sound`, because `Spec.Int'` gives `0` a production of its own precisely so
+that `01` is two tokens, and it also fails two tests and three corpus files. Accepting any low
+half in a surrogate pair fails the proof and one corpus check. The fourth is the one that
+separates them: accepting a low surrogate as the *leading* half fails `stringStep_char_sound` at
+the exact hypothesis of `Spec.Ch.surrogatePair` that says the leading half is high, and no test
+notices, because both spellings are still refused and only the error kind changes. So on this
+evidence the proofs mostly agree with the suite, and where they do not, the difference was one no
+corpus was ever going to see.
+
 Phase 6's last open box needed no work at all in the end. It was recorded as waiting on a
 characterisation of `Array.mapM`, and core carries `mapM_map` and `mapM_pure` as simp lemmas, so
 decoding an encoding collapses to `mapM pure` and the two proofs are four lines each. A deferral
@@ -596,7 +629,8 @@ No open questions. Work deliberately postponed:
 - [x] `Config` (duplicate keys, `maxDepth`, `maxNumberDigits`, BOM), structured `Error` with a
       byte offset, and `ErrorKind`
 - [x] Leaf scanners: whitespace, strings with escapes and surrogate pairs, and numbers, each
-      carrying its own consumption proof so termination needs no separate lemmas
+      carrying its own consumption proof, save the string step, whose two progress theorems sit
+      beside it for the reason section 6 gives
 - [x] The machine: `value`, `continueWith` and `member` over an explicit `Frame` stack, so nesting
       costs heap rather than C stack
 - [x] `parse` and `parseBytes`, the latter enforcing RFC 8259 section 8.1 through
@@ -607,9 +641,15 @@ No open questions. Work deliberately postponed:
 - [x] Depth, digit-count and duplicate-name guards, each with a test
 - [x] 68 behavioural tests: 26 accepted, 29 rejected, 5 adversarial, 4 properties, the last of
       these each confirmed by a mutation that ought to fail it
-- [ ] Soundness against `Spec`. This needs an invariant relating a machine state, meaning the
-      frame stack plus the remaining text, to a partial derivation. The leaf scanners can be
-      proved sound first and independently, which is where to start
+- [x] The bridge from positions to characters: `remaining p` is what is left of the text at `p`,
+      with `remaining s.startPos = s.toList` and one scanner step taking one character off the
+      front. Both come from core's `String.Pos.Splits`, so no new axioms about strings
+- [x] Every leaf scanner proved sound against its production: whitespace, the literals through
+      `expect?`, digits and each part of a number, the hex escapes, the two-character escapes,
+      code points and surrogate pairs, and a whole string
+- [ ] Soundness of the machine, and so of `parse`. What remains is an invariant relating a machine
+      state, meaning the frame stack plus the remaining text, to a partial derivation; the leaves
+      it will need are now all in place
 - [ ] `CanonicalNumbers` and `UniqueKeys` of parser output are property-tested, not proved. Both
       follow from the machine invariant above, so they are the same piece of work
 

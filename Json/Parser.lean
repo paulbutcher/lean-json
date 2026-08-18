@@ -100,6 +100,8 @@ instance : ToString Error := ⟨fun e => s!"{e.kind.describe} at byte {e.byteOff
 
 namespace Parser
 
+@[expose] section
+
 /-!
 The scanner walks the text by position rather than converting it to a list of characters first.
 That conversion cost about thirty bytes for every byte of input, which put a limit on the size of
@@ -239,9 +241,9 @@ What the next piece of a string is: its end, one character of it, or a failure. 
 and recursing once keeps `string` to a single recursive call, and so to a one-line termination
 argument, where the escapes would otherwise each need their own.
 -/
-inductive StringStep {s : String} (p : s.Pos) where
-  | done (pos : s.Pos) (consumed : pos.remainingBytes < p.remainingBytes)
-  | char (c : Char) (pos : s.Pos) (consumed : pos.remainingBytes < p.remainingBytes)
+inductive StringStep (s : String) where
+  | done (pos : s.Pos)
+  | char (c : Char) (pos : s.Pos)
   | fail (e : Error)
 
 /--
@@ -251,12 +253,12 @@ just after the last piece.
 An unpaired surrogate escape is an error rather than a replacement character, so text that cannot
 be represented is never silently altered.
 -/
-def stringStep (p : s.Pos) : StringStep p :=
-  match hc : step? p with
+def stringStep (p : s.Pos) : StringStep s :=
+  match step? p with
   | none => .fail ⟨byteOffset p, .unexpectedEnd⟩
-  | some ('"', q) => .done q (step?_lt hc)
+  | some ('"', q) => .done q
   | some ('\\', q) =>
-    match hu : step? q with
+    match step? q with
     | none => .fail ⟨byteOffset q, .unexpectedEnd⟩
     | some ('u', r) =>
       match hex4? r with
@@ -265,9 +267,7 @@ def stringStep (p : s.Pos) : StringStep p :=
         if h.value < 0xD800 || 0xDFFF < h.value then
           match charOfCodePoint? h.value with
           | none => .fail ⟨byteOffset r, .badHexEscape⟩
-          | some c =>
-            .char c h.pos (by
-              have := h.consumed; have := step?_lt hc; have := step?_lt hu; omega)
+          | some c => .char c h.pos
         else if h.value ≤ 0xDBFF then
           match escapeHex4? h.pos with
           | none => .fail ⟨byteOffset r, .loneSurrogate⟩
@@ -275,10 +275,7 @@ def stringStep (p : s.Pos) : StringStep p :=
             if 0xDC00 ≤ lo.value && lo.value ≤ 0xDFFF then
               match charOfCodePoint? (combineSurrogates h.value lo.value) with
               | none => .fail ⟨byteOffset r, .badHexEscape⟩
-              | some c =>
-                .char c lo.pos (by
-                  have := lo.consumed; have := h.consumed
-                  have := step?_lt hc; have := step?_lt hu; omega)
+              | some c => .char c lo.pos
             else
               .fail ⟨byteOffset r, .loneSurrogate⟩
         else
@@ -286,17 +283,56 @@ def stringStep (p : s.Pos) : StringStep p :=
     | some (c, r) =>
       match escapeChar? c with
       | none => .fail ⟨byteOffset q, .unknownEscape c⟩
-      | some ch => .char ch r (by have := step?_lt hc; have := step?_lt hu; omega)
+      | some ch => .char ch r
   | some (c, q) =>
-    if Spec.isUnescaped c then .char c q (step?_lt hc)
+    if Spec.isUnescaped c then .char c q
     else .fail ⟨byteOffset p, .controlCharInString c⟩
 
-/--
-The contents of a string, starting just after the opening quotation mark.
+/-- Reading a piece of a string always moves on, which is what makes `string` terminate. -/
+theorem stringStep_done_lt (p : s.Pos) :
+    ∀ q, stringStep p = .done q → q.remainingBytes < p.remainingBytes := by
+  fun_cases stringStep p with
+  | case2 w hc =>
+    intro q h
+    injection h with h
+    subst h
+    exact step?_lt hc
+  | _ => intro q h; simp at h
 
-A loop rather than a recursion that rebuilds its result on the way out: a string of a million
-characters would otherwise hold a frame and a step apiece until the closing quotation mark.
--/
+theorem stringStep_char_lt (p : s.Pos) :
+    ∀ c q, stringStep p = .char c q → q.remainingBytes < p.remainingBytes := by
+  fun_cases stringStep p with
+  | case6 w hc r hu hex hx _ ch hcp =>
+    intro c q h
+    injection h with _ h
+    subst h
+    have := hex.consumed
+    have := step?_lt hc
+    have := step?_lt hu
+    omega
+  | case9 w hc r hu hex hx _ _ lo hlo _ ch hcp =>
+    intro c q h
+    injection h with _ h
+    subst h
+    have := lo.consumed
+    have := hex.consumed
+    have := step?_lt hc
+    have := step?_lt hu
+    omega
+  | case13 w hc e r _ hu ch he =>
+    intro c q h
+    injection h with _ h
+    subst h
+    have := step?_lt hc
+    have := step?_lt hu
+    omega
+  | case14 e w _ _ hc _ =>
+    intro c q h
+    injection h with _ h
+    subst h
+    exact step?_lt hc
+  | _ => intro c q h; simp at h
+
 def string (start : s.Pos) (acc : String) : Except Error (Scanned String start) :=
   go start acc (Nat.le_refl _)
 where
@@ -304,10 +340,10 @@ where
       Except Error (Scanned String start) :=
     match hs : stringStep p with
     | .fail e => .error e
-    | .done q hq => .ok ⟨acc, q, by omega⟩
-    | .char c q hq => go q (acc.push c) (by omega)
+    | .done q => .ok ⟨acc, q, by have := stringStep_done_lt p q hs; omega⟩
+    | .char c q => go q (acc.push c) (by have := stringStep_char_lt p c q hs; omega)
   termination_by p.remainingBytes
-  decreasing_by exact hq
+  decreasing_by exact stringStep_char_lt p c q hs
 
 /-! ## Numbers -/
 
@@ -573,6 +609,8 @@ def parseBytes (b : ByteArray) (cfg : Config := {}) : Except Error Json :=
   match String.fromUTF8? b with
   | some s => parse s cfg
   | none => .error ⟨0, .invalidUtf8⟩
+
+end
 
 end Parser
 
