@@ -231,11 +231,15 @@ Json/Array.lean          general array facts the field lemmas need, absent from 
 Json/Basic.lean          Json, constructors, instances, UniqueKeys, field and depth lemmas
 Json/Number.lean         Number, Canonical, Eqv, Ord, bounded conversions
 Json/Spec.lean           RFC 8259 grammar as an inductive Prop
+Json/Spec/Length.lean    how much of the text each production consumes
 Json/Spec/Unambiguity.lean
                          one text names at most one value
+Json/Spec/Canonical.lean every number a derived value holds is canonical
 Json/Parser.lean         iterative parser, Config, structured Error
 Json/Parser/Soundness.lean
                          the position-to-characters bridge, leaf and machine soundness
+Json/Parser/UniqueKeys.lean
+                         strict parsing returns no object with a repeated name
 Json/Printer.lean        compress, pretty, escaping, number rendering
 Json/Printer/Soundness.lean
                          output is JSON text, output is valid UTF-8
@@ -400,6 +404,10 @@ step? p = some ('"', q) → string q "" = .ok r → Spec.Str (remaining p) r.val
 -- and the machine, where `Closes` says what the frames still on the stack demand of the text
 value cfg p depth stack = .ok (j, rp) →
   ∃ v t, Spec.Value (remaining p) v t ∧ Closes stack v t j (remaining rp)
+
+-- what a returned value holds, beyond the text it was read from. Proved
+parse s cfg = .ok j → CanonicalNumbers j
+cfg.duplicateKeys = .reject → parse s cfg = .ok j → UniqueKeys j
 
 -- completeness, per duplicate-key policy. v2, per D14
 Spec.Value bs j → parse .allow bs = .ok j
@@ -619,6 +627,16 @@ well as the proof, `isWs` being a definition the tests exercise directly. Droppi
 point from `frac` fails the printer's soundness proof too, since the printer then emits text the
 grammar reads as two numbers.
 
+The two claims about a returned value were confronted the same way, and what they caught says
+where each one lives. Dropping the name from the set an object frame carries lets
+`{"a":1,"a":2}` through: the unique-keys proof fails, and so do four tests, the property that
+strict parsing accepts exactly the objects with distinct names being a good one. Returning a
+number unnormalised fails the parser's soundness proof and nine tests, but not
+`Json/Spec/Canonical.lean`, which is a claim about the grammar rather than about the parser; what
+does fail it is mutating `Spec.Num` to record the digits as written. So the canonical-numbers
+theorem is really two claims stacked: the grammar names only canonical numbers, and the parser
+returns what the grammar names.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
@@ -717,10 +735,12 @@ No open questions. Work deliberately postponed:
       `member` are proved together by one induction on the bytes left. `text_parseFrom` lifts it
       to a whole text, `textOf_parse` to `parse` where no byte order mark is set aside, and
       `text_parse` states the case where one is
-- [ ] `CanonicalNumbers` and `UniqueKeys` of parser output are property-tested, not proved. The
-      first now follows from soundness and an induction over the grammar, `Spec.Num` recording a
-      normalised number; the second does not, the grammar admitting a repeated name, so it wants
-      its own argument about the set of names the machine has seen
+- [x] `CanonicalNumbers` and `UniqueKeys` of what the parser returns. The first is a property of
+      the grammar, `Spec.Num` recording what the digits denote rather than how they were written,
+      so it follows from soundness and one induction over the value family. The second is not,
+      the grammar admitting a repeated name, so it is a second induction over the machine: an
+      object frame's `Std.HashSet` holds every name already stored in the frame, which is what
+      makes refusing a name that is in it cover them all
 
 **Phase 5. Printer**
 - [x] `Number.toString`, `escape`, `renderString`, `compress`, `pretty`, `ToString` for both

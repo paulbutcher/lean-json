@@ -55,6 +55,8 @@ example := @Json.Parser.text_parseFrom
 example := @Json.Parser.text_parse
 example := @Json.Parser.textOf_parseBytes
 example := @Json.Parser.eq_of_textOf
+example := @Json.Parser.canonicalNumbers_parse
+example := @Json.Parser.uniqueKeys_parse
 
 /-- The headline claim, reached through the entry point a caller actually calls. -/
 example {s : String} {j : Json} (h : Json.parse s { ignoreBOM := false } = .ok j) :
@@ -69,6 +71,8 @@ example := @Json.Spec.num_unique
 example := @Json.Spec.str_unique
 example := @Json.Spec.text_unique
 example := @Json.Spec.textOf_unique
+example := @Json.Spec.canonicalNumbers_of_text
+example := @Json.Spec.value_length
 
 example := @Json.Spec.ws_eq_of_not_isWs
 example := @Json.Spec.char_not_surrogate

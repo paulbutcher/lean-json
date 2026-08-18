@@ -185,30 +185,10 @@ private def hasDup : List Nat → Bool
   | [] => false
   | x :: rest => rest.contains x || hasDup rest
 
-/-- Numerals of assorted shapes, including trailing zeros, so canonicalisation is exercised. -/
-private def numberText (n : Nat) : String :=
-  match n % 6 with
-  | 0 => "0"
-  | 1 => "-0"
-  | 2 => s!"{n}"
-  | 3 => s!"{n}.500"
-  | 4 => s!"-{n}e{n % 5}"
-  | _ => s!"{n}0"
-
-private def arrayText (ns : List Nat) : String :=
-  "[" ++ String.intercalate "," (ns.map numberText) ++ "]"
-
 /-- Under the strict default, an object is accepted exactly when its names are distinct. -/
 abbrev strictRejectsExactlyDuplicates : Prop :=
   NamedBinder "ks" <| ∀ ks : List Nat,
     (Json.parse (objectText ks)).toOption.isSome = !hasDup (ks.map (· % 3))
-
-/-- Whatever strict parsing accepts has no repeated name anywhere, which is D6's purpose. -/
-abbrev strictParseHasUniqueKeys : Prop :=
-  NamedBinder "ks" <| ∀ ks : List Nat,
-    (match Json.parse (objectText ks) with
-      | .ok j => uniqueKeys j
-      | .error _ => true) = true
 
 /-- Permissive parsing keeps every member, in order, duplicates included. -/
 abbrev allowKeepsEveryMember : Prop :=
@@ -217,20 +197,11 @@ abbrev allowKeepsEveryMember : Prop :=
       | .ok (.obj fields) => fields.size == ks.length
       | _ => false) = true
 
-/-- Every number the parser produces is in canonical form, as D2 requires. -/
-abbrev parsedNumbersAreCanonical : Prop :=
-  NamedBinder "ns" <| ∀ ns : List Nat,
-    (match Json.parse (arrayText ns) with
-      | .ok j => canonicalNumbers j
-      | .error _ => false) = true
-
 def all : Array TestCase :=
   accepted ++ rejected ++ messages ++ adversarial ++ #[
     property "strict parsing accepts exactly the objects with distinct names"
       strictRejectsExactlyDuplicates,
-    property "strict parsing yields unique keys" strictParseHasUniqueKeys,
-    property "permissive parsing keeps every member" allowKeepsEveryMember,
-    property "parsed numbers are canonical" parsedNumbersAreCanonical
+    property "permissive parsing keeps every member" allowKeepsEveryMember
   ]
 
 end Test.Parser

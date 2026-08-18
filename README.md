@@ -133,8 +133,12 @@ Proved:
   and the same for `pretty`. The work-stack traversal that runs is proved equal to a structural
   description of the same text, and the grammar theorems are proved about that.
 - Output is always valid UTF-8, by construction, since it is a `String`.
-- Numeric equality and structural equality coincide on canonical numbers, which is what makes
-  `==`, `compare` and `hash` agree on everything the parser produces.
+- What a parse returns holds canonical numbers throughout, so `==`, `compare` and `hash` agree
+  on everything it produces; and under the strict default no object in it repeats a field name.
+  The first is a property of the grammar, which records what digits denote rather than how they
+  were written; the second is a property of the machine, which carries the names it has seen.
+- Numeric equality and structural equality coincide on canonical numbers, which is what that
+  agreement rests on.
 - Every number the printer is asked to write, and every number `Number.ofFloat?` produces, is
   canonical.
 - The path operations hold their laws: what `set?` puts at a path is what `get?` finds there,
@@ -155,8 +159,6 @@ Not proved, and covered by tests instead:
 - **Completeness, meaning no false rejects.** Soundness says nothing about what the parser turns
   away, so this is where 318 files of the JSONTestSuite conformance corpus, two 3,000 round fuzz
   sweeps and the behavioural tests earn their keep.
-- **That what the parser returns holds canonical numbers and, by default, no repeated field
-  name.** Both are true of every value it builds, and both are tested; neither is yet a theorem.
 - **Round tripping through text**, `parse (render j) = .ok j`, which needs completeness, so it is
   property-tested and corpus-tested. `Float` is the one codec whose round trip is a property
   rather than a theorem, since it goes through the exact decimal expansion of a bit pattern.

@@ -7,6 +7,7 @@ module
 public import Json.Parser
 public import Json.Spec
 public import Json.Spec.Unambiguity
+public import Json.Spec.Canonical
 
 public section
 
@@ -869,6 +870,16 @@ the text derives it, and `Spec.textOf_unique` says the text derives nothing else
 theorem eq_of_textOf {s : String} {cfg : Config} {j j' : Json} (hbom : cfg.ignoreBOM = false)
     (h : parse s cfg = .ok j) (ht : Spec.TextOf s j') : j = j' :=
   Spec.textOf_unique (textOf_parse hbom h) ht
+
+
+/--
+Every number the parser returns is canonical, whatever the text spelled, since the grammar
+records what the digits denote rather than how they were written.
+-/
+theorem canonicalNumbers_parse {s : String} {cfg : Config} {j : Json} (h : parse s cfg = .ok j) :
+    CanonicalNumbers j := by
+  obtain ⟨t, ht, -⟩ := text_parse h
+  exact Spec.canonicalNumbers_of_text ht
 
 /-- Bytes the parser accepts are UTF-8 for a text of the grammar. -/
 theorem textOf_parseBytes {b : ByteArray} {cfg : Config} {j : Json} (hbom : cfg.ignoreBOM = false)

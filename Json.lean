@@ -7,12 +7,15 @@ module
 public import Json.Number
 public import Json.Basic
 public import Json.Spec
+public import Json.Spec.Length
 public import Json.Spec.Unambiguity
+public import Json.Spec.Canonical
 public import Json.Parser
 public import Json.Printer
 public import Json.FromTo
 public import Json.Query
 public import Json.Parser.Soundness
+public import Json.Parser.UniqueKeys
 public import Json.Printer.Soundness
 public import Json.Stream
 
