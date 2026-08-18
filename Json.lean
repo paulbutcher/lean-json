@@ -10,3 +10,5 @@ public import Json.Spec
 public import Json.Parser
 public import Json.Printer
 public import Json.FromTo
+public import Json.Query
+public import Json.Stream

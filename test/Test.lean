@@ -10,12 +10,16 @@ import Test.Parser
 import Test.Printer
 import Test.Printer.Soundness
 import Test.FromTo
+import Test.Query
+import Test.Stream
 
 namespace Test
 
 -- Each test module contributes its cases here. Modules that consist only of
 -- theorems need no entry: compiling them is passing.
 def all : Array TestCase :=
-  Test.Number.all ++ Test.Basic.all ++ Test.Parser.all ++ Test.Printer.all ++ Test.FromTo.all
+  Test.Number.all ++ Test.Basic.all ++ Test.Parser.all ++ Test.Printer.all ++
+    Test.FromTo.all ++ Test.Query.all ++
+    Test.Stream.all
 
 end Test

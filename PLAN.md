@@ -165,6 +165,18 @@ saw `"roles": ["_admin"]`.
 - **D27. Nothing in the codecs may panic, so `setObjValAs!` becomes `setObjValAs?`,** and the
   field names `parseTagged` and `parseCtorFields` take are `String`s rather than `Name`s, the
   latter being out of reach under constraint 3.
+- **D28. Path operations recurse along the path, never through the value.** `get?`, `set?`,
+  `modify?` and `remove?` descend one step per element of the `Path` the caller wrote, so the
+  depth they reach is that of the path and not that of the document. A hundred-thousand deep
+  value costs the same as a shallow one.
+- **D29. A gap along the path is an error, not an invitation to invent one.** `set?` adds a
+  field named by the last step of a path, since that is how an object gets built up, but will
+  not create intermediate objects or extend an array: guessing whether a gap should become an
+  object or an array is how a typo silently becomes a new field.
+- **D30. The stream helpers live in the `Json` namespace,** as `Json.readJson` and friends,
+  rather than extending `IO.FS.Stream`, for the reason given in D24. `readJsonToEnd` is the
+  addition worth having: reading a whole stream is what callers actually want, and core's
+  byte-counted `readJson` leaves them to find the count themselves.
 
 ## 4. Data model
 
@@ -329,7 +341,7 @@ aspirational.
 - [x] `Number`: `toString`, `Ord`, `Neg`, `OfScientific`, `OfNat`, shifts, `toFloat`,
       `ofFloat?`, bounded `toInt?` / `toNat?`
 - [x] `Json`: `DecidableEq`, `Hashable`, `Inhabited`, `Repr`, coercions, `mkObj`, `isNull`
-- [ ] Accessors: `getObj?`, `getArr?`, `getStr?`, `getNat?`, `getInt?`, `getBool?`, `getNum?`,
+- [x] Accessors: `getObj?`, `getArr?`, `getStr?`, `getNat?`, `getInt?`, `getBool?`, `getNum?`,
       `getObjVal?`, `getArrVal?`, `getObjValD`, `setObjVal`, `mergeObj`, `Structured`
 - [x] `parse`, `parseBytes`
 - [x] `compress`, `pretty`, `escape`, `renderString`, `ToString`
@@ -338,7 +350,7 @@ aspirational.
       `UInt64`, `Float`, `Structured`, `Std.TreeMap String`
 - [x] Helpers: `getObjValAs?`, `setObjValAs?`, `opt`, `getTag?`, `parseTagged`,
       `parseCtorFields`, `bignumFromJson?`, `bignumToJson`, `toStructured?`
-- [ ] Stream helpers: `readJson`, `writeJson`
+- [x] Stream helpers: `readJson`, `readJsonToEnd`, `writeJson`, `writeJsonPretty`
 - [ ] Companion package: `deriving ToJson, FromJson`, `json%`
 
 ## 11. Testing
@@ -379,6 +391,14 @@ teeth, but whether the theorem constrains the implementation that ships. Breakin
 that `true` prints as `TRUE`, and `escapeCharTo` so that a backspace escapes as `\B`, each
 fails a proof rather than a test, which is the evidence that the structural description the
 grammar theorems talk about is tied to the traversal that actually runs.
+
+
+A property can also be wrong about the code rather than blind to it. The Phase 7 removal
+property asserted that what had been removed was no longer at its path, which is false for an
+array: the elements after it close the gap, so that index is occupied again by its successor.
+The failure was the property's, and restating it as "a field disappears, an array grows one
+shorter" made it both true and stronger, since it now pins the closing of the gap that the
+first version never mentioned.
 
 ## 12. Deferred
 
@@ -505,8 +525,16 @@ No open questions. Work deliberately postponed:
       `Array.mapM`, and there is no characterisation of it to induct on yet
 
 **Phase 7. Ergonomics**
-- [ ] `Query`, path lookup, updates
-- [ ] `IO.FS.Stream` helpers
+- [x] `Step` and `Path`, with `get?`, `getD`, `has`, `getAs?`, `set?`, `setAs?`, `modify?` and
+      `remove?`, all recursing along the path rather than through the value, per D28
+- [x] `ToString` for `ErrorKind` and `Error`, so a failure reads as a sentence rather than as a
+      constructor, and a field name from the input is described rather than echoed when long
+- [x] Stream helpers per D30: `readJson`, `readJsonToEnd`, `writeJson`, `writeJsonPretty`
+- [x] 41 tests: lookup, update, removal and typed access, the error messages, the stream pair
+      in both directions, and three properties, each confirmed by a mutation
+- [ ] The API laws stay properties rather than theorems. `get? (set? j p v) p = some v` needs a
+      characterisation of `findLast?` over a set array, which is the same `Array.foldl` lemma
+      library that `dedupKeys` waits on in section 12
 
 **Phase 8. Assurance**
 - [ ] Vendor the conformance corpus under `test/`, with licence and attribution, and record

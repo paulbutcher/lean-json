@@ -57,6 +57,29 @@ structure Error where
   kind : ErrorKind
 deriving DecidableEq, Repr
 
+/-- A description fit for a user, rather than the constructor's `Repr`. -/
+def ErrorKind.describe : ErrorKind → String
+  | unexpectedEnd => "unexpected end of input"
+  | unexpectedChar c => s!"unexpected character {repr c}"
+  | trailingText c => s!"unexpected text after the value, starting with {repr c}"
+  | controlCharInString c =>
+    s!"a string holds the control character {repr c}, which has to be escaped"
+  | unknownEscape c => s!"unknown escape \\{c}"
+  | badHexEscape => "a \\u escape needs four hexadecimal digits"
+  | loneSurrogate => "a \\u escape denotes half of a surrogate pair, with no partner beside it"
+  | expectedDigit => "expected a digit"
+  -- A field name arrives from the input, so a long one is not repeated back.
+  | duplicateKey name =>
+    if name.length ≤ 40 then s!"the field name {repr name} appears twice"
+    else "a field name appears twice"
+  | depthExceeded => "nesting deeper than the configured limit"
+  | tooManyDigits => "a number with more digits than the configured limit"
+  | invalidUtf8 => "the input is not valid UTF-8"
+
+instance : ToString ErrorKind := ⟨ErrorKind.describe⟩
+
+instance : ToString Error := ⟨fun e => s!"{e.kind.describe} at character {e.position}"⟩
+
 namespace Parser
 
 /--

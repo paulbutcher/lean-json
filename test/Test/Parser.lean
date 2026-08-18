@@ -103,6 +103,24 @@ def rejected : Array TestCase := #[
 private def nested (depth : Nat) : String :=
   "".pushn '[' depth ++ "".pushn ']' depth
 
+/-! ## Error messages -/
+
+def messages : Array TestCase := #[
+  expectEq "an error says what and where"
+    (toString { position := 3, kind := .unexpectedChar 'x' : Error })
+    "unexpected character 'x' at character 3",
+  expectEq "a depth failure names the limit rather than the input"
+    (toString { position := 0, kind := .depthExceeded : Error })
+    "nesting deeper than the configured limit at character 0",
+  expectEq "a short duplicate name is quoted back"
+    (toString { position := 7, kind := .duplicateKey "a" : Error })
+    "the field name \"a\" appears twice at character 7",
+  -- A field name comes from the input, so a long one is described rather than repeated.
+  expectEq "a long duplicate name is not repeated back"
+    (toString { position := 7, kind := .duplicateKey ("k".pushn 'x' 100) : Error })
+    "a field name appears twice at character 7"
+]
+
 def adversarial : Array TestCase := #[
   -- Core aborts with a stack overflow on deep nesting. Here it is a plain error. Ten million
   -- deep behaves the same way but needs about 750MB, for the reason recorded in the plan's note
@@ -201,7 +219,7 @@ abbrev parsedNumbersAreCanonical : Prop :=
       | .error _ => false) = true
 
 def all : Array TestCase :=
-  accepted ++ rejected ++ adversarial ++ #[
+  accepted ++ rejected ++ messages ++ adversarial ++ #[
     property "strict parsing accepts exactly the objects with distinct names"
       strictRejectsExactlyDuplicates,
     property "strict parsing yields unique keys" strictParseHasUniqueKeys,
