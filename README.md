@@ -1,1 +1,181 @@
 # json
+
+A JSON library for Lean 4, written to be safe on input it did not choose.
+
+Nothing in it is `partial`, nothing in it can panic, and the parser and the printer both keep
+their work on the heap rather than on the C stack, so a document that nests a million deep is an
+error or a long string rather than a crash. The grammar of RFC 8259 is transcribed in
+`Json.Spec`, and the printer is proved against it: whatever it emits, the grammar accepts.
+
+The library depends on `Init` and `Std` and on nothing in the `Lean` namespace, so a program that
+reads and writes JSON does not carry the Lean frontend with it. `deriving ToJson, FromJson` and
+the `json%` literal syntax need the frontend to elaborate, so they live in a companion package
+that meta imports it, which keeps them out of what a program links.
+
+## What it fixes
+
+Measured against `Lean.Data.Json` on Lean v4.33.0. Each row is a regression test here.
+
+| Input | There | Here |
+|---|---|---|
+| `[` a million times | `Stack overflow detected`, SIGABRT, uncatchable | an error, or a value if the limit is lifted |
+| `1e1000000000` | hangs, computing ten to the billionth | read in constant time, the exponent never applied |
+| `"\ud800"` | silently becomes `U+FFFD` | refused: no sequence of code points denotes it |
+| `{"a":1,"a":2}` | silently last-wins, with no way to refuse | refused by default, permitted by configuration |
+| any object | field order lost | field order preserved, duplicates representable |
+| a deeply nested value, printed | overflows, both printers being recursive | printed iteratively |
+| `setObjVal!` on a non-object | panics | `setObjVal?` returns an error |
+| `toJson (1e-300 : Float)` | silently becomes `0` | exact, from the IEEE fields |
+| `⟨15,1⟩` against `⟨150,2⟩` | `==` and `compare` disagree | one canonical spelling, so they cannot |
+
+## Using it
+
+```lean
+require json from git "<repository url>" @ "main"
+```
+
+```lean
+import Json
+open Json
+
+#eval parse "{\"a\": [1, 2.5e3], \"b\": null}"
+-- Except.ok (Json.obj #[("a", ...), ("b", Json.null)])
+
+#eval (parse "[1,2]").toOption.map compress   -- some "[1,2]"
+#eval (parse "[1,2]").toOption.map pretty     -- some "[\n  1,\n  2\n]"
+```
+
+Failures say what was wrong and where, as a sentence:
+
+```lean
+#eval (parse "{\"a\":1,\"a\":2}").toOption.isNone
+-- true
+
+#eval match parse "[1,]" with | .error e => toString e | .ok _ => "accepted"
+-- "unexpected character ']' at character 3"
+```
+
+Values are read and written through `ToJson` and `FromJson`, reached along a `Path`, and moved
+over `IO.FS.Stream`:
+
+```lean
+#eval fromJson? (α := Array Nat) (toJson #[1, 2, 3])          -- Except.ok #[1, 2, 3]
+#eval (parse "{\"a\":{\"b\":[7]}}").toOption.bind
+  (·.get? [.field "a", .field "b", .index 0])                 -- some (Json.num ⟨7, 0⟩)
+```
+
+`Json.readJson`, `Json.readJsonToEnd`, `Json.writeJson` and `Json.writeJsonPretty` are the stream
+helpers; reading enforces UTF-8 where the bytes arrive, as RFC 8259 section 8.1 requires.
+
+## Deriving, and literal syntax
+
+```lean
+require jsonDeriving from git "<repository url>" @ "main" / "deriving"
+```
+
+```lean
+import JsonDeriving
+open Json
+
+structure Point where
+  x : Nat
+  y : Nat
+  label? : Option String        -- a trailing `?` makes the field optional
+deriving ToJson, FromJson
+
+#eval compress (toJson { x := 1, y := 2, label? := none : Point })   -- {"x":1,"y":2}
+#eval compress (json% {here: $(({ x := 1, y := 2, label? := none } : Point)), ok: true})
+```
+
+Recursive types are derived too, through the type itself or an `Array`, `List` or `Option` of it.
+Neither direction is `partial`: an encoder recurses on the value, which is structural, and a
+decoder is given a count, seeded with the depth of the value it was handed. A field that mentions
+its own type in some other shape, and a group of mutually defined types, are refused at derive
+time with a message saying so, rather than derived as something that might not terminate.
+
+## Defaults
+
+Reading is strict by default. `Json.Config` relaxes any of it.
+
+| Setting | Default | Why |
+|---|---|---|
+| `duplicateKeys` | `.reject` | see below |
+| `maxDepth` | `some 1024` | policy, not a crash guard: `none` is safe here |
+| `maxNumberDigits` | `some 1000` | building an integer from a digit run is quadratic |
+| `ignoreBOM` | `true` | RFC 8259 permits ignoring a leading `U+FEFF` |
+
+**Duplicate names are refused by default.** RFC 8259 leaves the outcome to the implementation,
+which means two programs reading the same bytes can disagree about what they say. That is not
+academic: a 2017 CouchDB privilege escalation came of a JavaScript parser and an Erlang parser
+resolving a repeated name differently, so one saw `"roles": []` where the other saw
+`"roles": ["_admin"]`. Pass `{ duplicateKeys := .allow }` to accept them, in which case every
+member is kept, in order, and lookup takes the last.
+
+The refusal of a lone surrogate is not configurable. `"\ud800"` denotes no sequence of code
+points, so there is nothing to build.
+
+## What is proved, and what is not
+
+Proved:
+
+- Whatever the printer emits, the grammar accepts: `CanonicalNumbers j → Spec.TextOf (compress j) j`,
+  and the same for `pretty`. The work-stack traversal that runs is proved equal to a structural
+  description of the same text, and the grammar theorems are proved about that.
+- Output is always valid UTF-8, by construction, since it is a `String`.
+- Numeric equality and structural equality coincide on canonical numbers, which is what makes
+  `==`, `compare` and `hash` agree on everything the parser produces.
+- Every number the printer is asked to write, and every number `Number.ofFloat?` produces, is
+  canonical.
+
+Not proved, and covered by tests instead:
+
+- **Parser soundness against the grammar.** It needs an invariant relating a machine state to a
+  partial derivation, and it is the next substantial piece of proof work. In the meantime the
+  parser is held to 318 files of the JSONTestSuite conformance corpus, two 3,000 round fuzz
+  sweeps, and a suite of behavioural tests.
+- **Completeness, meaning no false rejects.** The corpus is the evidence, not a theorem.
+- **Round tripping**, which needs completeness, so it is property-tested and corpus-tested.
+- **Absence of stack overflow and out-of-memory.** Both are achieved by construction and
+  evidenced by fuzzing rather than proved. Freeing a deeply nested value is a recursion the
+  library does not control, and it was measured rather than argued: a million-deep value built
+  and dropped repeatedly survives, with peak memory flat across rounds.
+- `Number.toFloat` is not verified against IEEE 754.
+
+## Speed, and a caveat about memory
+
+`bench/` times reading and writing beside `Lean.Data.Json` on the same text. Numbers from one
+machine, best of three, so useful for tracking rather than for comparing machines:
+
+| Document | Size | parse | compress | pretty | core parse |
+|---|---|---|---|---|---|
+| numbers | 311K | 18.3ms | 11.6ms | 13.6ms | 8.8ms |
+| wide object | 915K | 29.7ms | 9.1ms | 9.9ms | 17.4ms |
+| strings | 1063K | 25.7ms | 5.4ms | 5.8ms | 6.8ms |
+| records | 1442K | 45.0ms | 26.6ms | 40.4ms | 18.3ms |
+| nesting, 20,000 deep | 39K | 1.1ms | 1.7ms | - | 0.9ms |
+
+Reading is between one and four times slower than core, and the difference is deliberate:
+duplicate names are checked, numbers are canonicalised, and depth is counted. What is not
+deliberate is the memory: the scanner works over a `List Char`, which the whole input is
+converted to first, and that costs about 29 bytes for every byte of text. On a large body that
+is itself a denial of service vector, and scanning the `String` by index instead is the one
+change this library still needs before it can be called version 1. No theorem statement depends
+on it, every statement being written against `Spec` rather than against the scanner.
+
+## Building
+
+```
+lake build          # the library
+lake test           # both test suites, the library's and the companion's
+./scripts/check-imports.sh    # no Lean package imports in the library
+./scripts/check-runtime.sh    # and none reachable in what a consumer runs
+cd bench && lake exe bench    # timings
+```
+
+`PLAN.md` carries the decisions, what is proved, what is deferred, and why.
+
+## Licence
+
+Apache 2.0, in `LICENSE`. The conformance corpus under `test/corpus` is
+[JSONTestSuite](https://github.com/nst/JSONTestSuite), copyright (c) 2016 Nicolas Seriot, MIT
+licence, vendored with its licence and provenance beside it.

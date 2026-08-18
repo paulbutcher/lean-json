@@ -460,6 +460,9 @@ No open questions. Work deliberately postponed:
 
 - **Completeness proofs**, per D14. Until they land, the claim "no false rejects" rests on the
   corpus rather than on proof, and the README must say so.
+- **Nothing else in the public surface wants a doc string.** What the code already says is left
+  to the code, per the commenting rule; the documentation added in Phase 10 is the part that is
+  not visible from a signature.
 - **Subquadratic digit conversion.** A divide-and-conquer `Int`-from-digits conversion would
   let `maxNumberDigits := none` be the default rather than a documented hazard, retiring D21.
 - **Work-stack versions of `beq`, `hash`, `uniqueKeys` and `depth`,** so that stack safety no
@@ -469,7 +472,8 @@ No open questions. Work deliberately postponed:
 - **Proofs for `dedupKeys`,** which want a small library of `Array.foldl` characterisation
   lemmas that would also serve the parser and printer proofs.
 - **Index-based scanning in the parser,** to remove the 37x memory amplification measured in
-  section 6. This is a v1 blocker, not a nicety.
+  section 6, remeasured in Phase 10 at about 29 bytes a character on a 7MB document of records.
+  This is a v1 blocker, not a nicety.
 
 ## 13. Build order
 
@@ -617,10 +621,14 @@ No open questions. Work deliberately postponed:
       the library's own
 
 **Phase 10. Release**
-- [ ] Benchmarks, as regression tracking rather than a gate
-- [ ] README, including the duplicate-key default and its rationale, and the completeness
-      caveat from section 12
-- [ ] Doc strings across the public surface
+- [x] `bench/`, its own subproject and the one place allowed to import the Lean package, timing
+      reading and writing beside `Lean.Data.Json` on the same five documents, and measuring what
+      a byte of text costs in resident memory while it is being read
+- [x] README: what it fixes, how to use it, the duplicate-name default and the CouchDB
+      escalation that argues for it, what is proved against what is only tested, and the memory
+      amplification stated as the blocker it is
+- [x] Doc strings across the public surface, as module and section documentation carrying what
+      holds across a file rather than a line apiece restating the signatures
 
 **Post-v1**
 - [ ] Completeness theorems, per D14

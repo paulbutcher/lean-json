@@ -10,12 +10,28 @@ public section
 
 namespace Json
 
+/-!
+Reading text into a value.
+
+`parse` takes a `String` and `parseBytes` a `ByteArray`, which is where the UTF-8 that RFC 8259
+requires is enforced, by the verified decoder in `Init.Data.String.Decode`. Text that is not one
+complete value is an error rather than a partial value, and an error says what was wrong and
+where.
+
+The defaults are the strict readings, and none of them is a crash guard, the machine keeping its
+stack on the heap: a repeated field name is refused, nesting beyond 1024 is refused, and a
+significand of more than a thousand digits is refused unread. `Config` turns off any of the
+three. What no configuration relaxes is the refusal of a lone surrogate, which denotes no
+sequence of code points at all.
+-/
+
 /-- What to do when an object names the same field twice. -/
 inductive DuplicateKeys where
   | reject
   | allow
 deriving DecidableEq, Repr
 
+/-- How strictly to read. Every default here is the strict reading. -/
 structure Config where
   /--
   Rejecting is the default because the RFC leaves the outcome unspecified, so accepting exposes
@@ -36,6 +52,7 @@ structure Config where
   ignoreBOM : Bool := true
 deriving Repr
 
+/-- Why a text was refused. `describe` renders one as a sentence. -/
 inductive ErrorKind where
   | unexpectedEnd
   | unexpectedChar (c : Char)

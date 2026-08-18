@@ -10,6 +10,21 @@ namespace Json
 
 @[expose] section
 
+/-!
+Numbers as JSON writes them, `mantissa * 10 ^ exponent`, with the exponent carried rather than
+applied: `1e1000000000` is a pair of small integers here, where expanding it is a denial of
+service.
+
+`Canonical` picks one spelling of each value and the parser produces only canonical numbers, so
+structural equality agrees with numeric equality on everything that came from text. `Ord`
+compares numerically and so parts company with `=` on values that are not canonical; `Eqv` is
+numeric equality as a proposition, and `eqv_iff_eq` ties the two together where it matters.
+
+Every conversion out of a `Number` is bounded and says so in its type. `toInt?` and `toNat?`
+refuse a number whose padding would run past `maxPadding` digits, which is what makes a
+twelve-character text unable to ask for an integer of a billion digits.
+-/
+
 /-- A decimal number denoting `mantissa * 10 ^ exponent`. -/
 structure Number where
   mantissa : Int
@@ -313,6 +328,7 @@ def toInt? (n : Number) (maxPadding : Nat := 1000) : Option Int :=
     else
       none
 
+/-- As `toInt?`, refusing a negative value as well as an over-padded one. -/
 def toNat? (n : Number) (maxPadding : Nat := 1000) : Option Nat :=
   match n.toInt? maxPadding with
   | some i => if 0 ≤ i then some i.toNat else none

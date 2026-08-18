@@ -165,6 +165,8 @@ inductive Arr : List Char → Array Json → List Char → Prop where
   | items {s s' s'' vs r} : BeginArray s s' → Elements s' vs s'' → EndArray s'' r →
       Arr s vs.toArray r
 
+/-- `value *( value-separator value )`: an array's members, the brackets and the empty case
+being `Value`'s. -/
 inductive Elements : List Char → List Json → List Char → Prop where
   | one {s v r} : Value s v r → Elements s [v] r
   | more {s s' s'' v vs r} : Value s v s' → ValueSeparator s' s'' → Elements s'' vs r →
@@ -176,6 +178,8 @@ inductive Object : List Char → Array (String × Json) → List Char → Prop w
   | members {s s' s'' ms r} : BeginObject s s' → Members s' ms s'' → EndObject s'' r →
       Object s ms.toArray r
 
+/-- `member *( value-separator member )`: an object's members, the braces and the empty case
+being `Value`'s. -/
 inductive Members : List Char → List (String × Json) → List Char → Prop where
   | one {s m r} : Member s m r → Members s [m] r
   | more {s s' s'' m ms r} : Member s m s' → ValueSeparator s' s'' → Members s'' ms r →

@@ -15,6 +15,18 @@ namespace Json
 
 universe u v
 
+/-!
+Encoding to and decoding from `Json`.
+
+A decoder returns `Except String α`, and the message is written for a person to read. `none` is
+`null` and `some a` is whatever `a` is, so `Option (Option α)` does not round trip, as in every
+library that makes that choice. `USize` and `UInt64` are written as decimal strings, a JavaScript
+number holding integers exactly only to `2 ^ 53 - 1`.
+
+The handlers for `deriving ToJson, FromJson` are in the companion package, which is where the
+frontend may be imported. What they generate calls the helpers at the end of this file.
+-/
+
 /-- Types that can be encoded as JSON. -/
 class ToJson (α : Type u) where
   toJson : α → Json

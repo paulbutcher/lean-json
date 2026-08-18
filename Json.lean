@@ -12,3 +12,17 @@ public import Json.Printer
 public import Json.FromTo
 public import Json.Query
 public import Json.Stream
+
+/-!
+JSON for Lean, written to be safe on input it did not choose.
+
+`Json.Spec` transcribes the grammar of RFC 8259. The parser is stated against it, and both
+printers are proved to emit nothing it would refuse. Nothing here is `partial` and nothing here
+panics, and the parser and the printer both keep their work on the heap, so a document that
+nests a million deep is an error or a long string rather than a crash.
+
+Reading is strict by default: a repeated field name is refused, nesting beyond 1024 is refused,
+and a significand of more than a thousand digits is refused unread. `Json.Config` relaxes any of
+that. `deriving ToJson, FromJson` and the `json%` literal syntax are in the companion package,
+which is what keeps the frontend out of a program that only reads and writes JSON.
+-/

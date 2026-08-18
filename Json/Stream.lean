@@ -13,6 +13,14 @@ namespace Json
 
 @[expose] section
 
+/-!
+Reading and writing whole values over `IO.FS.Stream`.
+
+Reading goes through `parseBytes`, so UTF-8 is enforced where the bytes arrive, and a refusal
+becomes an `IO.userError` carrying what was wrong and where. There is no incremental or
+resumable parser: one call reads one complete value.
+-/
+
 /--
 Parses `nBytes` bytes read from `h` as one JSON text.
 

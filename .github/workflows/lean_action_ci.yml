@@ -23,6 +23,12 @@ jobs:
         run: lake build
         working-directory: deriving
 
+      # Built but not run: the timings track regressions rather than gate a release, and a
+      # benchmark that stops compiling is the failure worth catching here.
+      - name: Build the benchmarks
+        run: lake build
+        working-directory: bench
+
       # Reads the constraint off the compiled form rather than the source: nothing from the
       # Lean package may be reachable when a consumer's program runs.
       - name: Nothing from the Lean package at run time

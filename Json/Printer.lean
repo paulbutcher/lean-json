@@ -12,6 +12,18 @@ namespace Json.Printer
 
 @[expose] section
 
+/-!
+Writing a value out as text.
+
+`compress` and `pretty` share one traversal over an explicit stack of items, so nesting costs
+heap rather than C stack, and the text accumulates in a `String`, which makes the validity of
+its UTF-8 a property of the type rather than something to maintain by hand.
+
+A number is written out in full while its padding stays short and in exponent notation
+otherwise, so `⟨1,2⟩` is `100` and `⟨1,1000000000⟩` is `1e1000000000`. Both read back as the
+number they came from.
+-/
+
 /-! ## Digits -/
 
 def digitChar (d : Nat) : Char := Char.ofNat ('0'.toNat + d)

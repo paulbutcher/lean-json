@@ -12,6 +12,18 @@ namespace Json
 
 @[expose] section
 
+/-!
+Reaching into a value along a path.
+
+Every operation here recurses along the path rather than through the value, so what it costs is
+the length of the path, and a deeply nested document is no more dangerous than a flat one.
+
+`set?` adds a field named by the last step of a path, since that is how an object gets built up,
+but refuses a missing intermediate rather than inventing one: guessing whether a gap should
+become an object or an array is how a typo turns into a new field. `remove?` closes the gap it
+leaves in an array, so the index removed is occupied again by its successor.
+-/
+
 /-- One step into a value: a field of an object, or a position in an array. -/
 inductive Step where
   | field (name : String)

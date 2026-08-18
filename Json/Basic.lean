@@ -11,6 +11,20 @@ public section
 
 @[expose] section
 
+/-!
+The data model, and what can be done with it alone.
+
+An object holds its fields in the order they were written and can hold one name twice, so that a
+parsed value is a faithful image of its text. Lookup takes the last of a repeated name, as
+ECMA-262 and the mainstream implementations do. Equality and hashing are structural, which is
+safe here because `Json.Number` keeps one spelling of each number.
+
+Nothing here panics: an accessor returns `Except String`, or a default where the name says so.
+`beq`, `hash`, `uniqueKeys` and `depth` recurse on the stack rather than on the heap, which is
+safe for anything `parse` produced under the default depth limit, and worth remembering for a
+value built by hand or read with `maxDepth := none`.
+-/
+
 /--
 A JSON value.
 
@@ -226,6 +240,12 @@ def depthFields : List (String × Json) → Nat
   | (_, v) :: rest => max (depth v) (depthFields rest)
 
 end
+
+/-! ## Accessors
+
+Each reads one thing and says in `Except String` why it could not, so that a wrong shape is a
+value to handle rather than a panic. Where an object names a field twice, the last one wins.
+-/
 
 def getBool? : Json → Except String Bool
   | bool b => .ok b
