@@ -52,7 +52,7 @@ Failures say what was wrong and where, as a sentence:
 -- true
 
 #eval match parse "[1,]" with | .error e => toString e | .ok _ => "accepted"
--- "unexpected character ']' at character 3"
+-- "unexpected character ']' at byte 3"
 ```
 
 Values are read and written through `ToJson` and `FromJson`, reached along a `Path`, and moved
@@ -141,26 +141,28 @@ Not proved, and covered by tests instead:
   and dropped repeatedly survives, with peak memory flat across rounds.
 - `Number.toFloat` is not verified against IEEE 754.
 
-## Speed, and a caveat about memory
+## Speed
 
 `bench/` times reading and writing beside `Lean.Data.Json` on the same text. Numbers from one
 machine, best of three, so useful for tracking rather than for comparing machines:
 
 | Document | Size | parse | compress | pretty | core parse |
 |---|---|---|---|---|---|
-| numbers | 311K | 18.3ms | 11.6ms | 13.6ms | 8.8ms |
-| wide object | 915K | 29.7ms | 9.1ms | 9.9ms | 17.4ms |
-| strings | 1063K | 25.7ms | 5.4ms | 5.8ms | 6.8ms |
-| records | 1442K | 45.0ms | 26.6ms | 40.4ms | 18.3ms |
-| nesting, 20,000 deep | 39K | 1.1ms | 1.7ms | - | 0.9ms |
+| numbers | 311K | 10.3ms | 11.5ms | 13.4ms | 7.7ms |
+| wide object | 915K | 17.9ms | 7.5ms | 10.1ms | 16.0ms |
+| strings | 1063K | 18.3ms | 5.4ms | 6.4ms | 6.7ms |
+| records | 1442K | 32.1ms | 25.4ms | 39.6ms | 17.7ms |
+| nesting, 20,000 deep | 39K | 0.6ms | 1.9ms | - | 0.9ms |
 
-Reading is between one and four times slower than core, and the difference is deliberate:
-duplicate names are checked, numbers are canonicalised, and depth is counted. What is not
-deliberate is the memory: the scanner works over a `List Char`, which the whole input is
-converted to first, and that costs about 29 bytes for every byte of text. On a large body that
-is itself a denial of service vector, and scanning the `String` by index instead is the one
-change this library still needs before it can be called version 1. No theorem statement depends
-on it, every statement being written against `Spec` rather than against the scanner.
+Reading runs at 30 to 57 MB/s, between roughly level with core and about twice its time, and the
+difference is where the work is: duplicate names are checked, numbers are canonicalised, and depth
+is counted.
+
+Memory is the number worth watching, and `bench/` reports it: reading a 7MB document costs about
+four bytes of peak resident memory per byte of text, which is the text and the value and little
+else. The scanner walks the string by position rather than converting it to a list of characters
+first, which had cost about thirty bytes a character and put a ceiling on what could safely be
+read.
 
 ## Building
 

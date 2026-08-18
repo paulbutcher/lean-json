@@ -249,15 +249,25 @@ parser. Combinator recursion is what reaches SIGABRT in core, and it would also 
 well-founded recursion proof per combinator; one loop over remaining bytes gives termination
 almost free and bounds depth by heap rather than stack.
 
-**Input representation, and a measured cost.** The machine scans a `List Char`, which mirrors
-`Spec` exactly and so keeps the soundness proof within reach. It is paid for in memory: `parse`
-converts the whole text up front, and a 20MB document was measured at 734MB peak resident, about
-37 bytes per character. Throughput is 3.4x slower than `Lean.Data.Json` on the same 3.4MB document,
-284ms against 83ms, and scales linearly. The behaviour on adversarial nesting is right, ten million
-deep yielding `depthExceeded` in 619ms where core aborts, but the amplification is itself a denial
-of service vector on large bodies and has to go before v1. The fix is to scan the `String` by
-index rather than convert it, which changes no theorem statement, since every statement is written
-against `Spec` rather than against the scanner.
+**Input representation.** The machine walks the text by `String.Pos`, a position carrying a proof
+that it is on a character boundary. `step?` reads the character at a position and returns the next
+one, `Scanned` and `Consumed` carry the progress facts, and termination is `remainingBytes`
+decreasing, which `omega` discharges from those facts exactly as the list version's lengths did.
+
+This replaced a scanner over `List Char`, which mirrored `Spec` exactly but converted the whole
+text up front: 29 bytes of peak resident memory for every byte of input, measured, and 734MB for a
+20MB document. That was a denial of service vector on large bodies and the last thing standing
+between the library and v1. It is now about 4 bytes a character, and what a parse holds is the
+text and the value.
+
+**`step?` must be `@[inline]`,** and this is not a micro-optimisation. Without it the position
+scanner was two to three times *slower* than the list one, because every character allocated an
+`Option` and a pair; with it the constructor and the match that consumes it are fused away and the
+same code is 1.4 times faster than the list version, at 30 to 57 MB/s against core's 40 to 160.
+The lesson generalises to anything returning a small structure per input element.
+
+Errors carry a byte offset, which is what a position gives directly; a character offset would have
+to be counted separately, and byte offsets are what a caller indexes the input with anyway.
 
 `Config` carries `duplicateKeys := .reject`, `maxDepth := some 1024`,
 `maxNumberDigits := some 1000`, and BOM handling, which ignores a leading `U+FEFF` per D18.
@@ -444,6 +454,14 @@ without canonicalising them failed the corpus round trip and both sweeps at once
 narrowing the range of characters the printer escapes, never reached the tests: it fails a proof
 instead, which is where a printer mutation ought to be caught.
 
+Rewriting the scanner found the rule's other use: a mutation aimed at new code can fail to be
+caught, and what that indicts is the old test suite. Making `expect?` accept any character rather
+than the one asked for left all 272 tests passing, because nothing anywhere tested a literal of
+the right length and the wrong letters. The corpus has `nul` and `tru`, which are too short, and
+nothing has `nxyz`. Four tests were added, they fail against the mutation, and the hole they close
+predates the rewrite: the list scanner matched the characters by pattern, so it was correct by
+construction and nobody had to check.
+
 Phase 9's mutations were aimed at generated code, which is only ever seen through what it does.
 Seeding a derived decoder with a fixed count of one rather than the depth of the value failed
 six tests, all of them about recursion and none about anything else; keeping the `?` on an
@@ -471,9 +489,6 @@ No open questions. Work deliberately postponed:
   bound, since a value that came from `parse` under the default configuration is bounded.
 - **Proofs for `dedupKeys`,** which want a small library of `Array.foldl` characterisation
   lemmas that would also serve the parser and printer proofs.
-- **Index-based scanning in the parser,** to remove the 37x memory amplification measured in
-  section 6, remeasured in Phase 10 at about 29 bytes a character on a 7MB document of records.
-  This is a v1 blocker, not a nicety.
 
 ## 13. Build order
 
@@ -530,13 +545,16 @@ No open questions. Work deliberately postponed:
 
 **Phase 4. Parser**
 - [x] `Config` (duplicate keys, `maxDepth`, `maxNumberDigits`, BOM), structured `Error` with a
-      character offset, and `ErrorKind`
+      byte offset, and `ErrorKind`
 - [x] Leaf scanners: whitespace, strings with escapes and surrogate pairs, and numbers, each
       carrying its own consumption proof so termination needs no separate lemmas
 - [x] The machine: `value`, `continueWith` and `member` over an explicit `Frame` stack, so nesting
       costs heap rather than C stack
 - [x] `parse` and `parseBytes`, the latter enforcing RFC 8259 section 8.1 through
       `String.fromUTF8?`
+- [x] Scanning by `String.Pos` rather than over a converted `List Char`, which is what took the
+      memory from 29 bytes a character to about 4, and the throughput up by half. See the note
+      on input representation in section 6, and on `@[inline]` beside it
 - [x] Depth, digit-count and duplicate-name guards, each with a test
 - [x] 68 behavioural tests: 26 accepted, 29 rejected, 5 adversarial, 4 properties, the last of
       these each confirmed by a mutation that ought to fail it
@@ -604,6 +622,8 @@ No open questions. Work deliberately postponed:
       back from both spellings. Nesting, width, digits and exponents are pinned at their exact
       boundaries, and every byte above the ASCII range, alone or as a truncated sequence, is
       refused
+- [x] Four tests for a literal of the right length and the wrong letters, a gap the scanner
+      rewrite's mutation testing exposed in the suite as it stood
 - [x] Regressions for the rows of section 2 that the parser tests do not already carry:
       printing 200,000 deep, member order surviving both directions, a field set on a
       non-object, two spellings of one number that cannot disagree, and the teardown check

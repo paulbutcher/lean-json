@@ -19,7 +19,7 @@ private def ok (s : String) (expected : Json) (cfg : Config := {}) : TestCase :=
       | .ok j =>
         if j == expected then pure ()
         else throw (IO.userError s!"parsed to {repr j}, expected {repr expected}")
-      | .error e => throw (IO.userError s!"failed with {repr e.kind} at {e.position}") }
+      | .error e => throw (IO.userError s!"failed with {repr e.kind} at {e.byteOffset}") }
 
 private def rejects (s : String) (kind : ErrorKind) (cfg : Config := {}) : TestCase :=
   { name := s!"rejects {s}"
@@ -69,6 +69,12 @@ def rejected : Array TestCase := #[
   rejects "" .unexpectedEnd,
   rejects "   " .unexpectedEnd,
   rejects "nul" (.unexpectedChar 'n'),
+  -- The right length but the wrong letters, which a scanner that counted characters rather
+  -- than reading them would take for the literal it resembles.
+  rejects "nxyz" (.unexpectedChar 'n'),
+  rejects "trux" (.unexpectedChar 't'),
+  rejects "falsx" (.unexpectedChar 'f'),
+  rejects "[nxyz]" (.unexpectedChar 'n'),
   rejects "trues" (.trailingText 's'),
   rejects "01" (.trailingText '1'),
   rejects "-" .expectedDigit,
@@ -107,18 +113,18 @@ private def nested (depth : Nat) : String :=
 
 def messages : Array TestCase := #[
   expectEq "an error says what and where"
-    (toString { position := 3, kind := .unexpectedChar 'x' : Error })
-    "unexpected character 'x' at character 3",
+    (toString { byteOffset := 3, kind := .unexpectedChar 'x' : Error })
+    "unexpected character 'x' at byte 3",
   expectEq "a depth failure names the limit rather than the input"
-    (toString { position := 0, kind := .depthExceeded : Error })
-    "nesting deeper than the configured limit at character 0",
+    (toString { byteOffset := 0, kind := .depthExceeded : Error })
+    "nesting deeper than the configured limit at byte 0",
   expectEq "a short duplicate name is quoted back"
-    (toString { position := 7, kind := .duplicateKey "a" : Error })
-    "the field name \"a\" appears twice at character 7",
+    (toString { byteOffset := 7, kind := .duplicateKey "a" : Error })
+    "the field name \"a\" appears twice at byte 7",
   -- A field name comes from the input, so a long one is described rather than repeated.
   expectEq "a long duplicate name is not repeated back"
-    (toString { position := 7, kind := .duplicateKey ("k".pushn 'x' 100) : Error })
-    "a field name appears twice at character 7"
+    (toString { byteOffset := 7, kind := .duplicateKey ("k".pushn 'x' 100) : Error })
+    "a field name appears twice at byte 7"
 ]
 
 def adversarial : Array TestCase := #[
@@ -137,7 +143,7 @@ def adversarial : Array TestCase := #[
     run :=
       match Json.parse (nested 100000) { maxDepth := none } with
       | .ok _ => pure ()
-      | .error e => throw (IO.userError s!"failed with {repr e.kind} at {e.position}") },
+      | .error e => throw (IO.userError s!"failed with {repr e.kind} at {e.byteOffset}") },
   -- Core hangs on this input, computing ten to the billionth.
   { name := "a billion-place exponent is read, not applied"
     run :=

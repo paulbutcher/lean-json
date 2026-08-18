@@ -68,9 +68,9 @@ inductive ErrorKind where
   | invalidUtf8
 deriving DecidableEq, Repr
 
-/-- A failure, with the character offset at which it was detected. -/
+/-- A failure, with the byte offset into the text at which it was detected. -/
 structure Error where
-  position : Nat
+  byteOffset : Nat
   kind : ErrorKind
 deriving DecidableEq, Repr
 
@@ -95,44 +95,119 @@ def ErrorKind.describe : ErrorKind → String
 
 instance : ToString ErrorKind := ⟨ErrorKind.describe⟩
 
-instance : ToString Error := ⟨fun e => s!"{e.kind.describe} at character {e.position}"⟩
+instance : ToString Error := ⟨fun e => s!"{e.kind.describe} at byte {e.byteOffset}"⟩
+
 
 namespace Parser
 
-/--
-A scan that consumed at least one character of `input`. Carrying the proof here rather than
-proving it afterwards keeps the machine's termination argument to one line per call.
+/-!
+The scanner walks the text by position rather than converting it to a list of characters first.
+That conversion cost about thirty bytes for every byte of input, which put a limit on the size of
+document that could safely be read; a position costs nothing, so what a parse holds is the text
+and the value.
 -/
-structure Scanned (α : Type) (input : List Char) where
+
+section
+variable {s : String}
+
+/-- Where a position is, as a byte offset, which is what an error reports. -/
+def byteOffset (p : s.Pos) : Nat := p.offset.byteIdx
+
+/-- The character at `p` and the position after it, or nothing at the end of the text. -/
+@[inline]
+def step? (p : s.Pos) : Option (Char × s.Pos) :=
+  if h : p = s.endPos then none else some (p.get h, p.next h)
+
+theorem step?_lt {p q : s.Pos} {c : Char} (h : step? p = some (c, q)) :
+    q.remainingBytes < p.remainingBytes := by
+  rw [step?] at h
+  split at h
+  · simp at h
+  · rw [Option.some.injEq, Prod.mk.injEq] at h
+    exact (String.Pos.lt_iff_remainingBytes_lt _ _).mp (h.2 ▸ String.Pos.lt_next)
+
+/--
+A scan that consumed at least one character. Carrying the proof here rather than proving it
+afterwards keeps the machine's termination argument to one line per call.
+-/
+structure Scanned (α : Type) (start : s.Pos) where
   value : α
-  rest : List Char
-  pos : Nat
-  consumed : rest.length < input.length
+  pos : s.Pos
+  consumed : pos.remainingBytes < start.remainingBytes
+
+/-- A scan that may have consumed nothing, as whitespace and the optional productions can. -/
+structure Consumed (α : Type) (start : s.Pos) where
+  value : α
+  pos : s.Pos
+  notLonger : pos.remainingBytes ≤ start.remainingBytes
 
 /-! ## Leaf scanners -/
 
-/-- A scan that may have consumed nothing, as whitespace and the optional productions can. -/
-structure Consumed (α : Type) (input : List Char) where
-  value : α
-  rest : List Char
-  pos : Nat
-  notLonger : rest.length ≤ input.length
-
-def skipWs (input : List Char) (pos : Nat) : Consumed Unit input :=
-  match input with
-  | c :: rest =>
+def skipWs (p : s.Pos) : Consumed Unit p :=
+  match hc : step? p with
+  | some (c, q) =>
     if Spec.isWs c then
-      let r := skipWs rest (pos + 1)
-      ⟨(), r.rest, r.pos, by have := r.notLonger; simp; omega⟩
+      let r := skipWs q
+      ⟨(), r.pos, by have := r.notLonger; have := step?_lt hc; omega⟩
     else
-      ⟨(), c :: rest, pos, by simp⟩
-  | [] => ⟨(), [], pos, by simp⟩
+      ⟨(), p, Nat.le_refl _⟩
+  | none => ⟨(), p, Nat.le_refl _⟩
+termination_by p.remainingBytes
+decreasing_by exact step?_lt hc
 
-/-- `4HEXDIG`, taken as four characters so that the caller consumes them by pattern. -/
-def hex4? (c₁ c₂ c₃ c₄ : Char) : Option Nat :=
-  match Spec.hexVal? c₁, Spec.hexVal? c₂, Spec.hexVal? c₃, Spec.hexVal? c₄ with
-  | some v₁, some v₂, some v₃, some v₄ => some (v₁ * 4096 + v₂ * 256 + v₃ * 16 + v₄)
-  | _, _, _, _ => none
+/-- The characters of `l` in order, if the text at `p` begins with them. -/
+def expect? (p : s.Pos) : List Char → Option (Consumed Unit p)
+  | [] => some ⟨(), p, Nat.le_refl _⟩
+  | c :: rest =>
+    match hc : step? p with
+    | some (c', q) =>
+      if c == c' then
+        match expect? q rest with
+        | some r => some ⟨(), r.pos, by have := r.notLonger; have := step?_lt hc; omega⟩
+        | none => none
+      else none
+    | none => none
+
+/-- One hexadecimal digit, as a number. -/
+def hexDigit? (p : s.Pos) : Option (Scanned Nat p) :=
+  match hc : step? p with
+  | some (c, q) =>
+    match Spec.hexVal? c with
+    | some v => some ⟨v, q, step?_lt hc⟩
+    | none => none
+  | none => none
+
+/-- `4HEXDIG`, the body of a `\u` escape. -/
+def hex4? (p : s.Pos) : Option (Scanned Nat p) :=
+  match hexDigit? p with
+  | none => none
+  | some r₁ =>
+    match hexDigit? r₁.pos with
+    | none => none
+    | some r₂ =>
+      match hexDigit? r₂.pos with
+      | none => none
+      | some r₃ =>
+        match hexDigit? r₃.pos with
+        | none => none
+        | some r₄ =>
+          some ⟨r₁.value * 4096 + r₂.value * 256 + r₃.value * 16 + r₄.value, r₄.pos, by
+            have := r₁.consumed; have := r₂.consumed; have := r₃.consumed; have := r₄.consumed
+            omega⟩
+
+/-- A whole `\uXXXX` escape, which is how the low half of a surrogate pair is looked for. -/
+def escapeHex4? (p : s.Pos) : Option (Scanned Nat p) :=
+  match hc : step? p with
+  | some ('\\', q) =>
+    match hu : step? q with
+    | some ('u', r) =>
+      match hex4? r with
+      | some h =>
+        some ⟨h.value, h.pos, by
+          have := h.consumed; have := step?_lt hc; have := step?_lt hu; omega⟩
+      | none => none
+    | _ => none
+  | _ => none
 
 /-- The two-character escapes, which do not include `u`. -/
 def escapeChar? (c : Char) : Option Char :=
@@ -154,135 +229,142 @@ def combineSurrogates (hi lo : Nat) : Nat :=
   0x10000 + (hi - 0xD800) * 0x400 + (lo - 0xDC00)
 
 /--
-The contents of a string, starting just after the opening quotation mark.
+What the next piece of a string is: its end, one character of it, or a failure. Reading a piece
+and recursing once keeps `string` to a single recursive call, and so to a one-line termination
+argument, where the escapes would otherwise each need their own.
+-/
+inductive StringStep {s : String} (p : s.Pos) where
+  | done (pos : s.Pos) (consumed : pos.remainingBytes < p.remainingBytes)
+  | char (c : Char) (pos : s.Pos) (consumed : pos.remainingBytes < p.remainingBytes)
+  | fail (e : Error)
+
+/--
+One piece of a string, starting at `p`, which is either just after the opening quotation mark or
+just after the last piece.
 
 An unpaired surrogate escape is an error rather than a replacement character, so text that cannot
 be represented is never silently altered.
 -/
-def string (input : List Char) (pos : Nat) (acc : String) :
-    Except Error (Scanned String input) :=
-  match input with
-  | [] => .error ⟨pos, .unexpectedEnd⟩
-  | '"' :: rest => .ok ⟨acc, rest, pos + 1, by simp⟩
-  | '\\' :: 'u' :: c₁ :: c₂ :: c₃ :: c₄ :: afterHex =>
-    match hex4? c₁ c₂ c₃ c₄ with
-    | none => .error ⟨pos + 2, .badHexEscape⟩
-    | some v =>
-      if v < 0xD800 || 0xDFFF < v then
-        match charOfCodePoint? v with
-        | none => .error ⟨pos + 2, .badHexEscape⟩
-        | some c =>
-          match string afterHex (pos + 6) (acc.push c) with
-          | .error e => .error e
-          | .ok r => .ok ⟨r.value, r.rest, r.pos, by have := r.consumed; simp; omega⟩
-      else if v ≤ 0xDBFF then
-        match afterHex with
-        | '\\' :: 'u' :: d₁ :: d₂ :: d₃ :: d₄ :: afterLow =>
-          match hex4? d₁ d₂ d₃ d₄ with
-          | none => .error ⟨pos + 8, .badHexEscape⟩
+def stringStep (p : s.Pos) : StringStep p :=
+  match hc : step? p with
+  | none => .fail ⟨byteOffset p, .unexpectedEnd⟩
+  | some ('"', q) => .done q (step?_lt hc)
+  | some ('\\', q) =>
+    match hu : step? q with
+    | none => .fail ⟨byteOffset q, .unexpectedEnd⟩
+    | some ('u', r) =>
+      match hex4? r with
+      | none => .fail ⟨byteOffset r, .badHexEscape⟩
+      | some h =>
+        if h.value < 0xD800 || 0xDFFF < h.value then
+          match charOfCodePoint? h.value with
+          | none => .fail ⟨byteOffset r, .badHexEscape⟩
+          | some c =>
+            .char c h.pos (by
+              have := h.consumed; have := step?_lt hc; have := step?_lt hu; omega)
+        else if h.value ≤ 0xDBFF then
+          match escapeHex4? h.pos with
+          | none => .fail ⟨byteOffset r, .loneSurrogate⟩
           | some lo =>
-            if 0xDC00 ≤ lo && lo ≤ 0xDFFF then
-              match charOfCodePoint? (combineSurrogates v lo) with
-              | none => .error ⟨pos + 2, .badHexEscape⟩
+            if 0xDC00 ≤ lo.value && lo.value ≤ 0xDFFF then
+              match charOfCodePoint? (combineSurrogates h.value lo.value) with
+              | none => .fail ⟨byteOffset r, .badHexEscape⟩
               | some c =>
-                match string afterLow (pos + 12) (acc.push c) with
-                | .error e => .error e
-                | .ok r => .ok ⟨r.value, r.rest, r.pos, by have := r.consumed; simp; omega⟩
+                .char c lo.pos (by
+                  have := lo.consumed; have := h.consumed
+                  have := step?_lt hc; have := step?_lt hu; omega)
             else
-              .error ⟨pos + 2, .loneSurrogate⟩
-        | _ => .error ⟨pos + 2, .loneSurrogate⟩
-      else
-        .error ⟨pos + 2, .loneSurrogate⟩
-  | '\\' :: c :: afterEscape =>
-    match escapeChar? c with
-    | none => .error ⟨pos + 1, .unknownEscape c⟩
-    | some ch =>
-      match string afterEscape (pos + 2) (acc.push ch) with
-      | .error e => .error e
-      | .ok r => .ok ⟨r.value, r.rest, r.pos, by have := r.consumed; simp; omega⟩
-  | '\\' :: [] => .error ⟨pos + 1, .unexpectedEnd⟩
-  | c :: rest =>
-    if Spec.isUnescaped c then
-      match string rest (pos + 1) (acc.push c) with
-      | .error e => .error e
-      | .ok r => .ok ⟨r.value, r.rest, r.pos, by have := r.consumed; simp; omega⟩
-    else
-      .error ⟨pos, .controlCharInString c⟩
+              .fail ⟨byteOffset r, .loneSurrogate⟩
+        else
+          .fail ⟨byteOffset r, .loneSurrogate⟩
+    | some (c, r) =>
+      match escapeChar? c with
+      | none => .fail ⟨byteOffset q, .unknownEscape c⟩
+      | some ch => .char ch r (by have := step?_lt hc; have := step?_lt hu; omega)
+  | some (c, q) =>
+    if Spec.isUnescaped c then .char c q (step?_lt hc)
+    else .fail ⟨byteOffset p, .controlCharInString c⟩
+
+/-- The contents of a string, starting just after the opening quotation mark. -/
+def string (p : s.Pos) (acc : String) : Except Error (Scanned String p) :=
+  match hs : stringStep p with
+  | .fail e => .error e
+  | .done q hq => .ok ⟨acc, q, hq⟩
+  | .char c q hq =>
+    match string q (acc.push c) with
+    | .error e => .error e
+    | .ok t => .ok ⟨t.value, t.pos, by have := t.consumed; omega⟩
+termination_by p.remainingBytes
+decreasing_by exact hq
 
 /-! ## Numbers -/
 
 /-- `*DIGIT`, accumulating the most significant digit first. -/
-def digits (input : List Char) (pos value count : Nat) : Consumed (Nat × Nat) input :=
-  match input with
-  | c :: rest =>
+def digits (p : s.Pos) (value count : Nat) : Consumed (Nat × Nat) p :=
+  match hc : step? p with
+  | some (c, q) =>
     if Spec.isDigit c then
-      let r := digits rest (pos + 1) (value * 10 + Spec.digitVal c) (count + 1)
-      ⟨r.value, r.rest, r.pos, by have := r.notLonger; simp; omega⟩
+      let r := digits q (value * 10 + Spec.digitVal c) (count + 1)
+      ⟨r.value, r.pos, by have := r.notLonger; have := step?_lt hc; omega⟩
     else
-      ⟨(value, count), c :: rest, pos, by simp⟩
-  | [] => ⟨(value, count), [], pos, by simp⟩
+      ⟨(value, count), p, Nat.le_refl _⟩
+  | none => ⟨(value, count), p, Nat.le_refl _⟩
+termination_by p.remainingBytes
+decreasing_by exact step?_lt hc
 
 /-- `int = zero / ( digit1-9 *DIGIT )`. A leading zero stands alone, so `01` is two tokens. -/
-def intPart (input : List Char) (pos : Nat) : Except Error (Scanned (Nat × Nat) input) :=
-  match input with
-  | '0' :: rest => .ok ⟨(0, 1), rest, pos + 1, by simp⟩
-  | c :: rest =>
+def intPart (p : s.Pos) : Except Error (Scanned (Nat × Nat) p) :=
+  match hc : step? p with
+  | some ('0', q) => .ok ⟨(0, 1), q, step?_lt hc⟩
+  | some (c, q) =>
     if Spec.isDigit c then
-      let r := digits rest (pos + 1) (Spec.digitVal c) 1
-      .ok ⟨r.value, r.rest, r.pos, by have := r.notLonger; simp; omega⟩
+      let r := digits q (Spec.digitVal c) 1
+      .ok ⟨r.value, r.pos, by have := r.notLonger; have := step?_lt hc; omega⟩
     else
-      .error ⟨pos, .expectedDigit⟩
-  | [] => .error ⟨pos, .expectedDigit⟩
+      .error ⟨byteOffset p, .expectedDigit⟩
+  | none => .error ⟨byteOffset p, .expectedDigit⟩
 
 /-- `frac = decimal-point 1*DIGIT`, optional. -/
-def fracPart (input : List Char) (pos : Nat) : Except Error (Consumed (Nat × Nat) input) :=
-  match input with
-  | '.' :: c :: rest =>
-    if Spec.isDigit c then
-      let r := digits rest (pos + 2) (Spec.digitVal c) 1
-      .ok ⟨r.value, r.rest, r.pos, by have := r.notLonger; simp; omega⟩
-    else
-      .error ⟨pos + 1, .expectedDigit⟩
-  | '.' :: [] => .error ⟨pos + 1, .expectedDigit⟩
-  | other => .ok ⟨(0, 0), other, pos, Nat.le_refl _⟩
+def fracPart (p : s.Pos) : Except Error (Consumed (Nat × Nat) p) :=
+  match hc : step? p with
+  | some ('.', q) =>
+    match hd : step? q with
+    | some (c, r) =>
+      if Spec.isDigit c then
+        let t := digits r (Spec.digitVal c) 1
+        .ok ⟨t.value, t.pos, by
+          have := t.notLonger; have := step?_lt hc; have := step?_lt hd; omega⟩
+      else
+        .error ⟨byteOffset q, .expectedDigit⟩
+    | none => .error ⟨byteOffset q, .expectedDigit⟩
+  | _ => .ok ⟨(0, 0), p, Nat.le_refl _⟩
+
+/-- An optional `+` or `-`, reporting whether it was a minus. -/
+def expSign (p : s.Pos) : Consumed Bool p :=
+  match hs : step? p with
+  | some ('+', q) => ⟨false, q, Nat.le_of_lt (step?_lt hs)⟩
+  | some ('-', q) => ⟨true, q, Nat.le_of_lt (step?_lt hs)⟩
+  | _ => ⟨false, p, Nat.le_refl _⟩
 
 /-- `exp = e [ minus / plus ] 1*DIGIT`, optional. -/
-def expPart (input : List Char) (pos : Nat) : Except Error (Consumed (Int × Nat) input) :=
-  match input with
-  | e :: '+' :: c :: rest =>
+def expPart (p : s.Pos) : Except Error (Consumed (Int × Nat) p) :=
+  match he : step? p with
+  | some (e, q) =>
     if e == 'e' || e == 'E' then
-      if Spec.isDigit c then
-        let r := digits rest (pos + 3) (Spec.digitVal c) 1
-        .ok ⟨((r.value.1 : Int), r.value.2), r.rest, r.pos, by
-          have := r.notLonger; simp; omega⟩
-      else
-        .error ⟨pos + 2, .expectedDigit⟩
+      match expSign q with
+      | ⟨negative, r, hsign⟩ =>
+        match hd : step? r with
+        | some (c, t) =>
+          if Spec.isDigit c then
+            let u := digits t (Spec.digitVal c) 1
+            .ok ⟨(if negative then -(u.value.1 : Int) else (u.value.1 : Int), u.value.2), u.pos, by
+              have := u.notLonger; have := step?_lt he; have := step?_lt hd; omega⟩
+          else
+            .error ⟨byteOffset r, .expectedDigit⟩
+        | none => .error ⟨byteOffset r, .expectedDigit⟩
     else
-      .ok ⟨(0, 0), e :: '+' :: c :: rest, pos, Nat.le_refl _⟩
-  | e :: '-' :: c :: rest =>
-    if e == 'e' || e == 'E' then
-      if Spec.isDigit c then
-        let r := digits rest (pos + 3) (Spec.digitVal c) 1
-        .ok ⟨(-(r.value.1 : Int), r.value.2), r.rest, r.pos, by
-          have := r.notLonger; simp; omega⟩
-      else
-        .error ⟨pos + 2, .expectedDigit⟩
-    else
-      .ok ⟨(0, 0), e :: '-' :: c :: rest, pos, Nat.le_refl _⟩
-  | e :: c :: rest =>
-    if e == 'e' || e == 'E' then
-      if Spec.isDigit c then
-        let r := digits rest (pos + 2) (Spec.digitVal c) 1
-        .ok ⟨((r.value.1 : Int), r.value.2), r.rest, r.pos, by
-          have := r.notLonger; simp; omega⟩
-      else
-        .error ⟨pos + 1, .expectedDigit⟩
-    else
-      .ok ⟨(0, 0), e :: c :: rest, pos, Nat.le_refl _⟩
-  | e :: [] =>
-    if e == 'e' || e == 'E' then .error ⟨pos + 1, .expectedDigit⟩
-    else .ok ⟨(0, 0), [e], pos, Nat.le_refl _⟩
-  | [] => .ok ⟨(0, 0), [], pos, Nat.le_refl _⟩
+      .ok ⟨(0, 0), p, Nat.le_refl _⟩
+  | none => .ok ⟨(0, 0), p, Nat.le_refl _⟩
 
 def tooManyDigits (cfg : Config) (n : Nat) : Bool :=
   match cfg.maxNumberDigits with
@@ -295,36 +377,35 @@ def tooManyDigits (cfg : Config) (n : Nat) : Bool :=
 The exponent is recorded, never applied, so `1e1000000000` costs no more than a short number.
 What is bounded is the count of digits, because a mantissa is built from them one at a time.
 -/
-def unsignedNumber (cfg : Config) (input : List Char) (pos : Nat) (neg : Bool) :
-    Except Error (Scanned Number input) :=
-  match intPart input pos with
+def unsignedNumber (cfg : Config) (p : s.Pos) (neg : Bool) : Except Error (Scanned Number p) :=
+  match intPart p with
   | .error e => .error e
   | .ok i =>
-    match fracPart i.rest i.pos with
+    match fracPart i.pos with
     | .error e => .error e
     | .ok f =>
-      match expPart f.rest f.pos with
+      match expPart f.pos with
       | .error e => .error e
       | .ok x =>
         if tooManyDigits cfg (i.value.2 + f.value.2) || tooManyDigits cfg x.value.2 then
-          .error ⟨pos, .tooManyDigits⟩
+          .error ⟨byteOffset p, .tooManyDigits⟩
         else
           let magnitude : Nat := i.value.1 * 10 ^ f.value.2 + f.value.1
           let mantissa : Int := if neg then -(magnitude : Int) else (magnitude : Int)
-          .ok ⟨Number.normalize mantissa (x.value.1 - (f.value.2 : Int)), x.rest, x.pos, by
+          .ok ⟨Number.normalize mantissa (x.value.1 - (f.value.2 : Int)), x.pos, by
             have := i.consumed
             have := f.notLonger
             have := x.notLonger
             omega⟩
 
-def number (cfg : Config) (input : List Char) (pos : Nat) : Except Error (Scanned Number input) :=
-  match input with
-  | '-' :: rest =>
-    match unsignedNumber cfg rest (pos + 1) true with
+def number (cfg : Config) (p : s.Pos) : Except Error (Scanned Number p) :=
+  match hc : step? p with
+  | some ('-', q) =>
+    match unsignedNumber cfg q true with
     | .error e => .error e
-    | .ok r => .ok ⟨r.value, r.rest, r.pos, by have := r.consumed; simp; omega⟩
-  | c :: rest => unsignedNumber cfg (c :: rest) pos false
-  | [] => .error ⟨pos, .unexpectedEnd⟩
+    | .ok r => .ok ⟨r.value, r.pos, by have := r.consumed; have := step?_lt hc; omega⟩
+  | some _ => unsignedNumber cfg p false
+  | none => .error ⟨byteOffset p, .unexpectedEnd⟩
 
 /-! ## The machine -/
 
@@ -344,100 +425,111 @@ def depthExceeded (cfg : Config) (depth : Nat) : Bool :=
 mutual
 
 /-- Read one value, then hand it to the enclosing frames. -/
-def value (cfg : Config) (input : List Char) (pos depth : Nat) (stack : List Frame) :
-    Except Error (Json × List Char × Nat) :=
-  match input with
-  | 'n' :: 'u' :: 'l' :: 'l' :: rest => continueWith cfg .null rest (pos + 4) depth stack
-  | 't' :: 'r' :: 'u' :: 'e' :: rest => continueWith cfg (.bool true) rest (pos + 4) depth stack
-  | 'f' :: 'a' :: 'l' :: 's' :: 'e' :: rest =>
-    continueWith cfg (.bool false) rest (pos + 5) depth stack
-  | '"' :: rest =>
-    match string rest (pos + 1) "" with
+def value (cfg : Config) (p : s.Pos) (depth : Nat) (stack : List Frame) :
+    Except Error (Json × s.Pos) :=
+  match _hc : step? p with
+  | none => .error ⟨byteOffset p, .unexpectedEnd⟩
+  | some ('n', q) =>
+    match expect? q ['u', 'l', 'l'] with
+    | some ⟨_, r, _hr⟩ => continueWith cfg .null r depth stack
+    | none => .error ⟨byteOffset p, .unexpectedChar 'n'⟩
+  | some ('t', q) =>
+    match expect? q ['r', 'u', 'e'] with
+    | some ⟨_, r, _hr⟩ => continueWith cfg (.bool true) r depth stack
+    | none => .error ⟨byteOffset p, .unexpectedChar 't'⟩
+  | some ('f', q) =>
+    match expect? q ['a', 'l', 's', 'e'] with
+    | some ⟨_, r, _hr⟩ => continueWith cfg (.bool false) r depth stack
+    | none => .error ⟨byteOffset p, .unexpectedChar 'f'⟩
+  | some ('"', q) =>
+    match string q "" with
     | .error e => .error e
-    | .ok ⟨s, srest, spos, _⟩ => continueWith cfg (.str s) srest spos depth stack
-  | '[' :: rest =>
-    if depthExceeded cfg depth then .error ⟨pos, .depthExceeded⟩
+    | .ok ⟨text, r, _hr⟩ => continueWith cfg (.str text) r depth stack
+  | some ('[', q) =>
+    if depthExceeded cfg depth then .error ⟨byteOffset p, .depthExceeded⟩
     else
-      match skipWs rest (pos + 1) with
-      | ⟨_, wrest, wpos, _⟩ =>
-        match hw : wrest with
-        | ']' :: after => continueWith cfg (.arr #[]) after (wpos + 1) depth stack
-        | other => value cfg other wpos (depth + 1) (.arr #[] :: stack)
-  | '{' :: rest =>
-    if depthExceeded cfg depth then .error ⟨pos, .depthExceeded⟩
+      match skipWs q with
+      | ⟨_, w, _hw⟩ =>
+        match _hb : step? w with
+        | some (']', after) => continueWith cfg (.arr #[]) after depth stack
+        | _ => value cfg w (depth + 1) (.arr #[] :: stack)
+  | some ('{', q) =>
+    if depthExceeded cfg depth then .error ⟨byteOffset p, .depthExceeded⟩
     else
-      match skipWs rest (pos + 1) with
-      | ⟨_, wrest, wpos, _⟩ =>
-        match hw : wrest with
-        | '}' :: after => continueWith cfg (.obj #[]) after (wpos + 1) depth stack
-        | other => member cfg other wpos (depth + 1) #[] ∅ stack
-  | c :: rest =>
+      match skipWs q with
+      | ⟨_, w, _hw⟩ =>
+        match _hb : step? w with
+        | some ('}', after) => continueWith cfg (.obj #[]) after depth stack
+        | _ => member cfg w (depth + 1) #[] ∅ stack
+  | some (c, _) =>
     if c == '-' || Spec.isDigit c then
-      match number cfg (c :: rest) pos with
+      match number cfg p with
       | .error e => .error e
-      | .ok ⟨n, nrest, npos, _⟩ => continueWith cfg (.num n) nrest npos depth stack
+      | .ok ⟨n, r, _hr⟩ => continueWith cfg (.num n) r depth stack
     else
-      .error ⟨pos, .unexpectedChar c⟩
-  | [] => .error ⟨pos, .unexpectedEnd⟩
-termination_by input.length
-decreasing_by all_goals first | omega | (simp_all; omega) | simp_all
+      .error ⟨byteOffset p, .unexpectedChar c⟩
+termination_by p.remainingBytes
+decreasing_by
+  all_goals
+    first
+      | omega
+      | (have := step?_lt _hc; omega)
+      | (have := step?_lt _hc; have := step?_lt _hb; omega)
 
 /-- A value has just been completed; give it to the innermost frame. -/
-def continueWith (cfg : Config) (v : Json) (input : List Char) (pos depth : Nat)
-    (stack : List Frame) : Except Error (Json × List Char × Nat) :=
+def continueWith (cfg : Config) (v : Json) (p : s.Pos) (depth : Nat) (stack : List Frame) :
+    Except Error (Json × s.Pos) :=
   match stack with
-  | [] => .ok (v, input, pos)
+  | [] => .ok (v, p)
   | .arr elems :: outer =>
-    match skipWs input pos with
-    | ⟨_, wrest, wpos, _⟩ =>
-      match hw : wrest with
-      | ',' :: after =>
-        match skipWs after (wpos + 1) with
-        | ⟨_, w₂rest, w₂pos, _⟩ =>
-          value cfg w₂rest w₂pos depth (.arr (elems.push v) :: outer)
-      | ']' :: after => continueWith cfg (.arr (elems.push v)) after (wpos + 1) (depth - 1) outer
-      | c :: _ => .error ⟨wpos, .unexpectedChar c⟩
-      | [] => .error ⟨wpos, .unexpectedEnd⟩
+    match skipWs p with
+    | ⟨_, w, _hw⟩ =>
+      match _hb : step? w with
+      | some (',', after) =>
+        match skipWs after with
+        | ⟨_, w₂, _hw₂⟩ => value cfg w₂ depth (.arr (elems.push v) :: outer)
+      | some (']', after) => continueWith cfg (.arr (elems.push v)) after (depth - 1) outer
+      | some (c, _) => .error ⟨byteOffset w, .unexpectedChar c⟩
+      | none => .error ⟨byteOffset w, .unexpectedEnd⟩
   | .obj fields seen name :: outer =>
-    match skipWs input pos with
-    | ⟨_, wrest, wpos, _⟩ =>
-      match hw : wrest with
-      | ',' :: after =>
-        match skipWs after (wpos + 1) with
-        | ⟨_, w₂rest, w₂pos, _⟩ =>
-          member cfg w₂rest w₂pos depth (fields.push (name, v)) seen outer
-      | '}' :: after =>
-        continueWith cfg (.obj (fields.push (name, v))) after (wpos + 1) (depth - 1) outer
-      | c :: _ => .error ⟨wpos, .unexpectedChar c⟩
-      | [] => .error ⟨wpos, .unexpectedEnd⟩
-termination_by input.length
-decreasing_by all_goals first | omega | (simp_all; omega) | simp_all
+    match skipWs p with
+    | ⟨_, w, _hw⟩ =>
+      match _hb : step? w with
+      | some (',', after) =>
+        match skipWs after with
+        | ⟨_, w₂, _hw₂⟩ => member cfg w₂ depth (fields.push (name, v)) seen outer
+      | some ('}', after) =>
+        continueWith cfg (.obj (fields.push (name, v))) after (depth - 1) outer
+      | some (c, _) => .error ⟨byteOffset w, .unexpectedChar c⟩
+      | none => .error ⟨byteOffset w, .unexpectedEnd⟩
+termination_by p.remainingBytes
+decreasing_by all_goals (have := step?_lt _hb; omega)
 
 /-- Having just seen `{` or `,` inside an object, read a member's name and its colon. -/
-def member (cfg : Config) (input : List Char) (pos depth : Nat)
-    (fields : Array (String × Json)) (seen : Std.HashSet String) (stack : List Frame) :
-    Except Error (Json × List Char × Nat) :=
-  match input with
-  | '"' :: rest =>
-    match string rest (pos + 1) "" with
+def member (cfg : Config) (p : s.Pos) (depth : Nat) (fields : Array (String × Json))
+    (seen : Std.HashSet String) (stack : List Frame) : Except Error (Json × s.Pos) :=
+  match _hc : step? p with
+  | some ('"', q) =>
+    match string q "" with
     | .error e => .error e
-    | .ok ⟨k, krest, kpos, _⟩ =>
-      if cfg.duplicateKeys == .reject && seen.contains k then
-        .error ⟨pos, .duplicateKey k⟩
+    | .ok ⟨name, k, _hk⟩ =>
+      if cfg.duplicateKeys == .reject && seen.contains name then
+        .error ⟨byteOffset p, .duplicateKey name⟩
       else
-        match skipWs krest kpos with
-        | ⟨_, wrest, wpos, _⟩ =>
-          match _hw : wrest with
-          | ':' :: after =>
-            match skipWs after (wpos + 1) with
-            | ⟨_, w₂rest, w₂pos, _⟩ =>
-              value cfg w₂rest w₂pos depth (.obj fields (seen.insert k) k :: stack)
-          | c :: _ => .error ⟨wpos, .unexpectedChar c⟩
-          | [] => .error ⟨wpos, .unexpectedEnd⟩
-  | c :: _ => .error ⟨pos, .unexpectedChar c⟩
-  | [] => .error ⟨pos, .unexpectedEnd⟩
-termination_by input.length
-decreasing_by all_goals first | omega | (simp_all; omega) | simp_all
+        match skipWs k with
+        | ⟨_, w, _hw⟩ =>
+          match _hb : step? w with
+          | some (':', after) =>
+            match skipWs after with
+            | ⟨_, w₂, _hw₂⟩ => value cfg w₂ depth (.obj fields (seen.insert name) name :: stack)
+          | some (c, _) => .error ⟨byteOffset w, .unexpectedChar c⟩
+          | none => .error ⟨byteOffset w, .unexpectedEnd⟩
+  | some (c, _) => .error ⟨byteOffset p, .unexpectedChar c⟩
+  | none => .error ⟨byteOffset p, .unexpectedEnd⟩
+termination_by p.remainingBytes
+decreasing_by all_goals (have := step?_lt _hc; have := step?_lt _hb; omega)
+
+end
 
 end
 
@@ -445,19 +537,18 @@ end
 
 /-- Parse JSON text. Text that is not a single complete value is an error, never a partial value. -/
 def parse (s : String) (cfg : Config := {}) : Except Error Json :=
-  let chars := s.toList
-  let chars :=
-    match chars with
-    | c :: rest => if cfg.ignoreBOM && c.toNat == 0xFEFF then rest else chars
-    | [] => chars
-  let w := skipWs chars 0
-  match value cfg w.rest w.pos 0 [] with
+  let start :=
+    match step? s.startPos with
+    | some (c, q) => if cfg.ignoreBOM && c.toNat == 0xFEFF then q else s.startPos
+    | none => s.startPos
+  let w := skipWs start
+  match value cfg w.pos 0 [] with
   | .error e => .error e
-  | .ok (j, rest, pos) =>
-    let w₂ := skipWs rest pos
-    match w₂.rest with
-    | [] => .ok j
-    | c :: _ => .error ⟨w₂.pos, .trailingText c⟩
+  | .ok (j, p) =>
+    let w₂ := skipWs p
+    match step? w₂.pos with
+    | none => .ok j
+    | some (c, _) => .error ⟨byteOffset w₂.pos, .trailingText c⟩
 
 /--
 Parse JSON text from bytes. RFC 8259 section 8.1 requires UTF-8, and that is enforced here by the

@@ -27,7 +27,7 @@ def printing : Array TestCase := #[
     run := do
       let text := compress (deep 200000)
       match Json.parse text { maxDepth := none } with
-      | .error e => throw (IO.userError s!"failed with {repr e.kind} at {e.position}")
+      | .error e => throw (IO.userError s!"failed with {repr e.kind} at {e.byteOffset}")
       | .ok j => if compress j != text then throw (IO.userError "the text changed") },
   -- Laying it out costs a line and an indent per level, so this one is bounded by its own
   -- output rather than by the printer.
@@ -35,7 +35,7 @@ def printing : Array TestCase := #[
     run := do
       let text := pretty (deep 1000)
       match Json.parse text { maxDepth := none } with
-      | .error e => throw (IO.userError s!"failed with {repr e.kind} at {e.position}")
+      | .error e => throw (IO.userError s!"failed with {repr e.kind} at {e.byteOffset}")
       | .ok j => if compress j != compress (deep 1000) then
           throw (IO.userError "the value changed") },
   -- The member order of an object is the order it was written in, and survives both directions.
