@@ -16,6 +16,13 @@ namespace Test.Api
 
 example := @Json.beq_iff_eq
 
+example := @Json.Alg.fold_eq_run
+example := @Json.beqPairs_eq
+example := @Json.hash_eq_run
+example := @Json.uniqueKeys_eq_run
+example := @Json.canonicalNumbers_eq_run
+example := @Json.depth_eq_run
+
 example := @Json.findLast?_push
 example := @Json.findLast?_setIfInBounds
 example := @Json.distinctNames_iff

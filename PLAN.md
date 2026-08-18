@@ -25,14 +25,17 @@ supersede it rather than editing history. Check items off in the build order as 
 4. **Stack safety by construction.** Every operation whose input can be deeply nested uses
    an explicit heap-allocated work stack, never recursion on the C stack.
 
-   As of Phase 2 this holds for the default path but not universally. `beq`, `hash`,
-   `uniqueKeys` and `depth` recurse, as do the codecs the companion generates, and what
-   protects them is `maxDepth`: a value obtained from `parse`
-   under the default configuration is depth-bounded, so recursing over it cannot overflow. A
-   value built programmatically, or parsed with `maxDepth := none`, can be arbitrarily deep,
-   and those three are then at risk. Replacing them with work-stack versions is tracked in
-   section 12, and no downstream statement changes when they are, because every theorem is
-   stated about `=` rather than about `beq`.
+   As of Phase 2 the traversals hold this by proof rather than by care. Each of `beq`, `hash`,
+   `uniqueKeys`, `canonicalNumbers` and `depth` is written as the recursion its theorems are
+   stated against, and `csimp` hands the compiled program an equal traversal from
+   `Json/Fold.lean` whose pending work is a list. Nothing downstream changes, since every
+   theorem is stated about `=` and about the recursive form.
+
+   What still recurses is the codecs the companion generates, and what protects them is
+   `maxDepth`: a value obtained from `parse` under the default configuration is depth-bounded,
+   so recursing over it cannot overflow. A value built programmatically, or parsed with
+   `maxDepth := none`, can be arbitrarily deep, and a generated codec is then at risk. Freeing
+   a value is a recursion the library does not perform and cannot control.
 5. **New module system.** Both packages use `module` with explicit `public import` /
    `meta import`. This is what gives constraint 2 its teeth.
 
@@ -228,7 +231,10 @@ mantissas, so the alignment factor is bounded by mantissa length and never by th
 
 ```
 Json/Array.lean          general array facts the field lemmas need, absent from core
-Json/Basic.lean          Json, constructors, instances, UniqueKeys, field and depth lemmas
+Json/Value.lean          the inductive, alone, so that the fold can come before what uses it
+Json/Fold.lean           Alg, the fold that keeps its work in a list, and its agreement with run
+Json/Basic.lean          constructors, instances, UniqueKeys, field and depth lemmas, each
+                         traversal tied to its folded form
 Json/Number.lean         Number, Canonical, Eqv, Ord, bounded conversions
 Json/Spec.lean           RFC 8259 grammar as an inductive Prop
 Json/Spec/Length.lean    how much of the text each production consumes
@@ -259,6 +265,12 @@ and lives in `test/` only when it is neither that nor needed for the library to 
 why the field and path lemmas, the depth bounds and the printer's grammar theorems are here
 rather than beside the tests that used to hold them, and why `Json/Spec.lean` exposes its
 definitions: reasoning against the grammar means unfolding them.
+
+`Json/Value.lean` holds the inductive and nothing else so that `Json/Fold.lean` can sit between
+it and `Json/Basic.lean`. A `csimp` lemma is read when the code that calls the function is
+compiled, so it has to be in scope by then: with the fold in a module above `Json/Basic.lean`,
+`instBEq` and `instHashable` would be built without it, and so would anything a client wrote
+that imported `Json.Basic` alone.
 
 ## 6. Parser
 
@@ -434,6 +446,10 @@ distinctNames (dedupKeys a)
 distinctNames a → dedupKeys a = a
 j.set? p v = .ok j' → j'.get? p = some v
 j.get? p = some v → j.set? p v = .ok j
+
+-- every traversal of a value, proved equal to the one that keeps its work in a list
+Alg.fold a j = Alg.run a j
+beqPairs l = l.all fun p => beq p.1 p.2
 
 -- numbers
 Canonical a → Canonical b → (Eqv a b ↔ a = b)
@@ -637,6 +653,19 @@ does fail it is mutating `Spec.Num` to record the digits as written. So the cano
 theorem is really two claims stacked: the grammar names only canonical numbers, and the parser
 returns what the grammar names.
 
+The fold was confronted with four. Closing an array without the element in hand, descending into
+an object field under the wrong name, dropping the length check from `beqPairs`, and dropping
+`distinctNames` from the folded key check are each caught, the first two by `machine` and the
+others by the theorem that ties a traversal to its recursion. Where the tests are in this is
+worth stating, because it is not where it looks. A mutation of a folded form is invisible to any
+test that reasons: `by simp` and `by decide` are about the recursive definition, and `csimp`
+touches only compiled code, so `(arr #[1] == arr #[1, 1]) = false` holds no matter what the
+compiled comparison does. Only a test that runs the function can see one, and before the
+deep-traversal case `hash` and `depth` had no such caller in the suite at all, while
+`uniqueKeys` and `canonicalNumbers` had one apiece, inside a fuzz property. `beq` has many, but
+they compare values that agree, which a comparison made too permissive still gets right. That is
+the argument for the new case, and it is an argument about coverage rather than about count.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
@@ -648,10 +677,9 @@ No open questions. Work deliberately postponed:
   not visible from a signature.
 - **Subquadratic digit conversion.** A divide-and-conquer `Int`-from-digits conversion would
   let `maxNumberDigits := none` be the default rather than a documented hazard, retiring D21.
-- **Work-stack versions of `beq`, `hash`, `uniqueKeys` and `depth`,** so that stack safety no
-  longer depends on the parser's depth bound. See the note under constraint 4. Generated codecs
-  join the same list: they recurse on the C stack, and what protects them is the same depth
-  bound, since a value that came from `parse` under the default configuration is bounded.
+- **A generated codec that does not recurse.** The handlers the companion writes walk a value on
+  the C stack, and what protects them is the depth bound, since a value that came from `parse`
+  under the default configuration is bounded. See the note under constraint 4.
 
 ## 13. Build order
 
@@ -693,8 +721,9 @@ No open questions. Work deliberately postponed:
       and an object that repeats none is left alone, from which idempotence follows. The
       lemmas the proofs rest on ship with it, describing a field array one `push` at a time,
       with the general array facts they need in `Json/Array.lean`
-- [ ] Stack-safe traversal primitive. See the note on constraint 4 below; the termination lemma it
-      needs, `(l.map sizeOf).sum < sizeOf l`, is proved out and ready to use
+- [x] Stack-safe traversal primitive: `Alg` and `fold`, proved equal to the recursion it stands
+      for, with `beq`, `hash`, `uniqueKeys`, `canonicalNumbers` and `depth` each tied to their
+      folded form by `csimp`. Comparison walks two values and so keeps a list of pairs instead
 
 **Phase 3. Specification**
 - [x] Every production of RFC 8259 section 2 transcribed: `Ws`, `Token`, `Digits`, `Int'`,

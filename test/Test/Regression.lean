@@ -16,9 +16,11 @@ escape and a repeated name, are pinned beside the parser, and the float conversi
 codecs; what follows is everything else.
 -/
 
-/-- A chain of single-element arrays, built by iteration so that the test's own depth is one. -/
-private def deep (n : Nat) : Json :=
-  (List.range n).foldl (fun j _ => .arr #[j]) .null
+/-- A chain of single-element arrays around `bottom`, iterated so the test's own depth is one. -/
+private def deepFrom (n : Nat) (bottom : Json) : Json :=
+  (List.range n).foldl (fun j _ => .arr #[j]) bottom
+
+private def deep (n : Nat) : Json := deepFrom n .null
 
 def printing : Array TestCase := #[
   -- Printing a deeply nested value is where a recursive printer overflows even though parsing
@@ -75,6 +77,24 @@ def teardown : Array TestCase := #[
       if kept != 3 then throw (IO.userError "the values were not built") }
 ]
 
-def all : Array TestCase := printing ++ values ++ teardown
+/-!
+Every traversal of a value is a traversal of whatever a caller built, and nothing bounds how deep
+that is. These five walk the whole value, and each of them overflowed the stack before they were
+paired with a fold.
+-/
+def traversal : Array TestCase := #[
+  { name := "a million deep is hashed, compared, checked and measured"
+    run := do
+      let bottom := mkObj [("a", (1 : Json)), ("b", .str "x")]
+      let j := deepFrom 1000000 bottom
+      let k := deepFrom 1000000 bottom
+      if Json.hash j != Json.hash k then throw (IO.userError "the hashes differ")
+      if !(j == k) then throw (IO.userError "the values differ")
+      if !Json.uniqueKeys j then throw (IO.userError "a repeated name was reported")
+      if !Json.canonicalNumbers j then throw (IO.userError "a number was called uncanonical")
+      if j.depth != 1000001 then throw (IO.userError s!"the depth came out as {j.depth}") }
+]
+
+def all : Array TestCase := printing ++ values ++ teardown ++ traversal
 
 end Test.Regression

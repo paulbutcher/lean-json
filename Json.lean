@@ -5,6 +5,8 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import Json.Number
+public import Json.Value
+public import Json.Fold
 public import Json.Basic
 public import Json.Spec
 public import Json.Spec.Length

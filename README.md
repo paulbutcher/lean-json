@@ -2,11 +2,11 @@
 
 A JSON library for Lean 4, written to be safe on input it did not choose.
 
-Nothing in it is `partial`, nothing in it can panic, and the parser and the printer both keep
-their work on the heap rather than on the C stack, so a document that nests a million deep is an
-error or a long string rather than a crash. The grammar of RFC 8259 is transcribed in
-`Json.Spec`, and both directions are proved against it: whatever the printer emits, the grammar
-accepts; whatever the parser accepts, the grammar derives.
+Nothing in it is `partial`, nothing in it can panic, and nothing in it walks a value on the C
+stack: reading, writing, comparing, hashing and measuring all keep their work on the heap, so a
+document that nests a million deep is an error or a long string rather than a crash. The grammar
+of RFC 8259 is transcribed in `Json.Spec`, and both directions are proved against it: whatever
+the printer emits, the grammar accepts; whatever the parser accepts, the grammar derives.
 
 The library depends on `Init` and `Std` and on nothing in the `Lean` namespace, so a program that
 reads and writes JSON does not carry the Lean frontend with it. `deriving ToJson, FromJson` and
@@ -133,6 +133,10 @@ Proved:
   and the same for `pretty`. The work-stack traversal that runs is proved equal to a structural
   description of the same text, and the grammar theorems are proved about that.
 - Output is always valid UTF-8, by construction, since it is a `String`.
+- Every walk of a whole value agrees with one that keeps its pending work in a list rather than
+  on the stack, and it is the second that runs: `Alg.fold_eq_run`, with `beq`, `hash`,
+  `uniqueKeys`, `canonicalNumbers` and `depth` each tied to their folded form. A claim stated
+  about the plain recursion is therefore a claim about what the program does, at any depth.
 - What a parse returns holds canonical numbers throughout, so `==`, `compare` and `hash` agree
   on everything it produces; and under the strict default no object in it repeats a field name.
   The first is a property of the grammar, which records what digits denote rather than how they
@@ -162,10 +166,13 @@ Not proved, and covered by tests instead:
 - **Round tripping through text**, `parse (render j) = .ok j`, which needs completeness, so it is
   property-tested and corpus-tested. `Float` is the one codec whose round trip is a property
   rather than a theorem, since it goes through the exact decimal expansion of a bit pattern.
-- **Absence of stack overflow and out-of-memory.** Both are achieved by construction and
-  evidenced by fuzzing rather than proved. Freeing a deeply nested value is a recursion the
-  library does not control, and it was measured rather than argued: a million-deep value built
-  and dropped repeatedly survives, with peak memory flat across rounds.
+- **Absence of stack overflow and out-of-memory.** No theorem says a program will not run out of
+  either. What is proved is that what runs is the traversal holding its work in a list; that this
+  costs heap rather than stack is by construction, and evidenced by fuzzing. Two recursions sit
+  outside it: a codec the companion generates walks a value on the stack, and freeing a deeply
+  nested value is a recursion the library does not perform and cannot control. The second was
+  measured rather than argued: a million-deep value built and dropped repeatedly survives, with
+  peak memory flat across rounds.
 - `Number.toFloat` is not verified against IEEE 754.
 
 ## Speed

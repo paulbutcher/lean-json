@@ -6,6 +6,7 @@ module
 
 public import Json.Array
 public import Json.Number
+public import Json.Fold
 public import Std.Data.HashSet
 
 public section
@@ -21,26 +22,11 @@ ECMA-262 and the mainstream implementations do. Equality and hashing are structu
 safe here because `Json.Number` keeps one spelling of each number.
 
 Nothing here panics: an accessor returns `Except String`, or a default where the name says so.
-`beq`, `hash`, `uniqueKeys` and `depth` recurse on the stack rather than on the heap, which is
-safe for anything `parse` produced under the default depth limit, and worth remembering for a
-value built by hand or read with `maxDepth := none`.
+Each of `beq`, `hash`, `uniqueKeys`, `canonicalNumbers` and `depth` is written as a recursion,
+which is the form its proofs are stated against, and paired with a `csimp` lemma that hands the
+compiled program the equal traversal from `Json.Fold`, whose pending work is a list rather than
+a C stack. A value that nests a million deep therefore costs heap and not a crash.
 -/
-
-/--
-A JSON value.
-
-Object fields keep the order they appeared in, and duplicate names are representable, so a parsed
-value is a faithful image of its text. Lookup resolves duplicates by taking the last, matching
-ECMA-262 and the mainstream implementations.
--/
-inductive Json where
-  | null
-  | bool (b : Bool)
-  | num (n : Json.Number)
-  | str (s : String)
-  | arr (elems : Array Json)
-  | obj (fields : Array (String × Json))
-deriving Inhabited, Repr
 
 namespace Json
 
@@ -101,6 +87,45 @@ theorem beqFields_iff_eq : ∀ xs ys : List (String × Json), beqFields xs ys = 
 
 end
 
+/-! ## Walking a value without the stack
+
+Each traversal below is written twice: as a recursion, which is what every theorem about it is
+stated against, and again through `Json.Fold`, which holds its pending work in a list. A `csimp`
+lemma joins the two, so what a caller reasons about and what the program runs are one function.
+Comparison is the odd one out, having two values to walk and so no part-built result to carry.
+-/
+
+theorem beqList_zip : ∀ xs ys : List Json,
+    beqList xs ys = ((xs.length == ys.length) && (xs.zip ys).all fun p => beq p.1 p.2)
+  | [], [] => rfl
+  | [], _ :: _ => rfl
+  | _ :: _, [] => rfl
+  | x :: xs, y :: ys => by
+    simp only [beqList, beqList_zip xs ys, List.zip_cons_cons, List.all_cons, List.length_cons]
+    cases beq x y <;> simp
+
+theorem beqFields_zip : ∀ xs ys : List (String × Json),
+    beqFields xs ys = ((xs.map Prod.fst == ys.map Prod.fst) &&
+      ((xs.map Prod.snd).zip (ys.map Prod.snd)).all fun p => beq p.1 p.2)
+  | [], [] => rfl
+  | [], _ :: _ => rfl
+  | _ :: _, [] => rfl
+  | (k₁, v₁) :: xs, (k₂, v₂) :: ys => by
+    simp only [beqFields, beqFields_zip xs ys, List.map_cons, List.zip_cons_cons, List.all_cons]
+    cases beq v₁ v₂ <;> cases h : k₁ == k₂ <;> simp_all
+
+theorem beqPairs_eq (l : List (Json × Json)) : beqPairs l = l.all fun p => beq p.1 p.2 := by
+  induction l using beqPairs.induct <;>
+    simp_all [beqPairs, beq, List.all_append, beqList_zip, beqFields_zip, valuePairs,
+      Bool.and_assoc]
+
+def beqFold (a b : Json) : Bool := beqPairs [(a, b)]
+
+@[csimp] theorem beq_eq_beqFold : @beq = @beqFold := by
+  funext a b
+  rw [beqFold, beqPairs_eq]
+  simp
+
 instance : DecidableEq Json := fun a b => decidable_of_iff _ (beq_iff_eq a b)
 
 instance : BEq Json := ⟨beq⟩
@@ -128,6 +153,44 @@ def hashFields : List (String × Json) → UInt64
   | (k, v) :: rest => mixHash (mixHash (Hashable.hash k) (hash v)) (hashFields rest)
 
 end
+
+def hashAlg : Alg UInt64 where
+  null := 11
+  bool := fun b => mixHash 13 (Hashable.hash b)
+  num := fun n => mixHash 17 (Hashable.hash n)
+  str := fun s => mixHash 19 (Hashable.hash s)
+  arr := fun elems => mixHash 23 (elems.toList.foldr mixHash 7)
+  obj := fun fields =>
+    mixHash 29 (fields.toList.foldr (fun p acc => mixHash (mixHash (Hashable.hash p.1) p.2) acc) 7)
+
+mutual
+
+theorem hash_eq_run : ∀ j : Json, hash j = hashAlg.run j
+  | .null => rfl
+  | .bool _ => rfl
+  | .num _ => rfl
+  | .str _ => rfl
+  | .arr elems => by rw [hash, Alg.run, hashList_eq_run]; rfl
+  | .obj fields => by rw [hash, Alg.run, hashFields_eq_run]; rfl
+
+theorem hashList_eq_run : ∀ l : List Json, hashList l = (hashAlg.runList l).foldr mixHash 7
+  | [] => rfl
+  | j :: rest => by
+    rw [hashList, Alg.runList, List.foldr_cons, hash_eq_run j, hashList_eq_run rest]
+
+theorem hashFields_eq_run : ∀ l : List (String × Json), hashFields l =
+    (hashAlg.runFields l).foldr (fun p acc => mixHash (mixHash (Hashable.hash p.1) p.2) acc) 7
+  | [] => rfl
+  | (k, v) :: rest => by
+    rw [hashFields, Alg.runFields, List.foldr_cons, hash_eq_run v, hashFields_eq_run rest]
+
+end
+
+def hashFold (j : Json) : UInt64 := hashAlg.fold j
+
+@[csimp] theorem hash_eq_hashFold : @hash = @hashFold := by
+  funext j
+  rw [hashFold, Alg.fold_eq_run, hash_eq_run]
 
 instance : Hashable Json := ⟨hash⟩
 
@@ -179,6 +242,54 @@ where
     else
       true
 
+/-- The names an object gives its fields, in the order they appear. -/
+def fieldNames (a : Array (String × α)) : List String := a.toList.map (·.1)
+
+@[simp] theorem fieldNames_push (a : Array (String × α)) (x : String × α) :
+    fieldNames (a.push x) = fieldNames a ++ [x.1] := by simp [fieldNames]
+
+private theorem fieldNames_length (a : Array (String × α)) : (fieldNames a).length = a.size := by
+  simp [fieldNames]
+
+private theorem fieldNames_drop (a : Array (String × α)) {i : Nat} (h : i < a.size) :
+    (fieldNames a).drop i = a[i].1 :: (fieldNames a).drop (i + 1) := by
+  have hi : i < (fieldNames a).length := by simpa [fieldNames_length] using h
+  rw [List.drop_eq_getElem_cons hi]
+  simp [fieldNames]
+
+private theorem distinctNamesGo (a : Array (String × α)) (i : Nat) (seen : Std.HashSet String) :
+    distinctNames.go a i seen = true ↔
+      ((fieldNames a).drop i).Nodup ∧ ∀ x ∈ (fieldNames a).drop i, seen.contains x = false := by
+  induction i, seen using distinctNames.go.induct (fields := a) with
+  | case1 i seen h k hc =>
+    rw [distinctNames.go, dif_pos h, if_pos hc, fieldNames_drop a h]
+    have hmem : a[i].1 ∈ seen := by simpa using hc
+    simp [hmem]
+  | case2 i seen h k hc ih =>
+    rw [distinctNames.go, dif_pos h, if_neg hc, ih, fieldNames_drop a h]
+    simp only [Std.HashSet.contains_insert]
+    grind
+  | case3 i seen h =>
+    have hnil : (fieldNames a).drop i = [] := by
+      apply List.drop_eq_nil_of_le
+      rw [fieldNames_length]
+      omega
+    rw [distinctNames.go, dif_neg h]
+    simp [hnil]
+
+theorem distinctNames_iff (a : Array (String × α)) :
+    distinctNames a = true ↔ (fieldNames a).Nodup := by
+  rw [distinctNames, distinctNamesGo]
+  simp
+
+theorem distinctNames_congr {a : Array (String × α)} {b : Array (String × β)}
+    (h : fieldNames a = fieldNames b) : distinctNames a = distinctNames b := by
+  rw [Bool.eq_iff_iff, distinctNames_iff, distinctNames_iff, h]
+
+theorem distinctNames_runFields (a : Alg α) (l : List (String × Json)) :
+    distinctNames (a.runFields l).toArray = distinctNames l.toArray :=
+  distinctNames_congr (by simp [fieldNames, Alg.runFields_names])
+
 mutual
 
 /-- No object anywhere in the value has a repeated field name. -/
@@ -196,6 +307,48 @@ def uniqueKeysFields : List (String × Json) → Bool
   | (_, v) :: rest => uniqueKeys v && uniqueKeysFields rest
 
 end
+
+def uniqueKeysAlg : Alg Bool where
+  null := true
+  bool := fun _ => true
+  num := fun _ => true
+  str := fun _ => true
+  arr := fun elems => elems.toList.foldr (· && ·) true
+  obj := fun fields => distinctNames fields && fields.toList.foldr (fun p acc => p.2 && acc) true
+
+mutual
+
+theorem uniqueKeys_eq_run : ∀ j : Json, uniqueKeys j = uniqueKeysAlg.run j
+  | .null => rfl
+  | .bool _ => rfl
+  | .num _ => rfl
+  | .str _ => rfl
+  | .arr elems => by rw [uniqueKeys, Alg.run, uniqueKeysList_eq_run]; rfl
+  | .obj fields => by
+    rw [uniqueKeys, Alg.run, uniqueKeysFields_eq_run]
+    simp only [uniqueKeysAlg, distinctNames_runFields, Array.toArray_toList]
+
+theorem uniqueKeysList_eq_run : ∀ l : List Json,
+    uniqueKeysList l = (uniqueKeysAlg.runList l).foldr (· && ·) true
+  | [] => rfl
+  | j :: rest => by
+    rw [uniqueKeysList, Alg.runList, List.foldr_cons, uniqueKeys_eq_run j,
+      uniqueKeysList_eq_run rest]
+
+theorem uniqueKeysFields_eq_run : ∀ l : List (String × Json),
+    uniqueKeysFields l = (uniqueKeysAlg.runFields l).foldr (fun p acc => p.2 && acc) true
+  | [] => rfl
+  | (k, v) :: rest => by
+    rw [uniqueKeysFields, Alg.runFields, List.foldr_cons, uniqueKeys_eq_run v,
+      uniqueKeysFields_eq_run rest]
+
+end
+
+def uniqueKeysFold (j : Json) : Bool := uniqueKeysAlg.fold j
+
+@[csimp] theorem uniqueKeys_eq_uniqueKeysFold : @uniqueKeys = @uniqueKeysFold := by
+  funext j
+  rw [uniqueKeysFold, Alg.fold_eq_run, uniqueKeys_eq_run]
 
 /-- `uniqueKeys` as a proposition, decidable by construction. -/
 abbrev UniqueKeys (j : Json) : Prop := uniqueKeys j = true
@@ -221,6 +374,48 @@ end
 
 abbrev CanonicalNumbers (j : Json) : Prop := canonicalNumbers j = true
 
+def canonicalNumbersAlg : Alg Bool where
+  null := true
+  bool := fun _ => true
+  num := fun n => decide n.Canonical
+  str := fun _ => true
+  arr := fun elems => elems.toList.foldr (· && ·) true
+  obj := fun fields => fields.toList.foldr (fun p acc => p.2 && acc) true
+
+mutual
+
+theorem canonicalNumbers_eq_run : ∀ j : Json, canonicalNumbers j = canonicalNumbersAlg.run j
+  | .null => rfl
+  | .bool _ => rfl
+  | .num _ => rfl
+  | .str _ => rfl
+  | .arr elems => by rw [canonicalNumbers, Alg.run, canonicalNumbersList_eq_run]; rfl
+  | .obj fields => by rw [canonicalNumbers, Alg.run, canonicalNumbersFields_eq_run]; rfl
+
+theorem canonicalNumbersList_eq_run : ∀ l : List Json,
+    canonicalNumbersList l = (canonicalNumbersAlg.runList l).foldr (· && ·) true
+  | [] => rfl
+  | j :: rest => by
+    rw [canonicalNumbersList, Alg.runList, List.foldr_cons, canonicalNumbers_eq_run j,
+      canonicalNumbersList_eq_run rest]
+
+theorem canonicalNumbersFields_eq_run : ∀ l : List (String × Json),
+    canonicalNumbersFields l =
+      (canonicalNumbersAlg.runFields l).foldr (fun p acc => p.2 && acc) true
+  | [] => rfl
+  | (k, v) :: rest => by
+    rw [canonicalNumbersFields, Alg.runFields, List.foldr_cons, canonicalNumbers_eq_run v,
+      canonicalNumbersFields_eq_run rest]
+
+end
+
+def canonicalNumbersFold (j : Json) : Bool := canonicalNumbersAlg.fold j
+
+@[csimp] theorem canonicalNumbers_eq_canonicalNumbersFold :
+    @canonicalNumbers = @canonicalNumbersFold := by
+  funext j
+  rw [canonicalNumbersFold, Alg.fold_eq_run, canonicalNumbers_eq_run]
+
 mutual
 
 /--
@@ -241,6 +436,43 @@ def depthFields : List (String × Json) → Nat
   | (_, v) :: rest => max (depth v) (depthFields rest)
 
 end
+
+def depthAlg : Alg Nat where
+  null := 0
+  bool := fun _ => 0
+  num := fun _ => 0
+  str := fun _ => 0
+  arr := fun elems => elems.toList.foldr max 0 + 1
+  obj := fun fields => fields.toList.foldr (fun p acc => max p.2 acc) 0 + 1
+
+mutual
+
+theorem depth_eq_run : ∀ j : Json, depth j = depthAlg.run j
+  | .null => rfl
+  | .bool _ => rfl
+  | .num _ => rfl
+  | .str _ => rfl
+  | .arr elems => by rw [depth, Alg.run, depthList_eq_run]; rfl
+  | .obj fields => by rw [depth, Alg.run, depthFields_eq_run]; rfl
+
+theorem depthList_eq_run : ∀ l : List Json, depthList l = (depthAlg.runList l).foldr max 0
+  | [] => rfl
+  | j :: rest => by
+    rw [depthList, Alg.runList, List.foldr_cons, depth_eq_run j, depthList_eq_run rest]
+
+theorem depthFields_eq_run : ∀ l : List (String × Json),
+    depthFields l = (depthAlg.runFields l).foldr (fun p acc => max p.2 acc) 0
+  | [] => rfl
+  | (k, v) :: rest => by
+    rw [depthFields, Alg.runFields, List.foldr_cons, depth_eq_run v, depthFields_eq_run rest]
+
+end
+
+def depthFold (j : Json) : Nat := depthAlg.fold j
+
+@[csimp] theorem depth_eq_depthFold : @depth = @depthFold := by
+  funext j
+  rw [depthFold, Alg.fold_eq_run, depth_eq_run]
 
 /--
 Every member of a container is strictly shallower than the container itself, which is what makes
@@ -350,18 +582,9 @@ def mergeObj : Json → Json → Json
 `findLast?`, `findLastIdx?` and `dedupKeys` are each a left fold over the field array, so a claim
 about any of them is a claim about what a fold accumulates, and `Array.pushInduction` is the
 induction that fits: each fold has a single lemma saying what pushing a field does to it, and the
-rest follows from those. `distinctNames` is a loop rather than a fold, so it is first related to
-`Nodup` and then given a lemma of the same shape.
+rest follows from those. `distinctNames` is a loop rather than a fold, and is read as `Nodup` of
+the names where it is defined; what it gets here is a lemma of the same shape as the others.
 -/
-
-/-- The names an object gives its fields, in the order they appear. -/
-def fieldNames (a : Array (String × α)) : List String := a.toList.map (·.1)
-
-@[simp] theorem fieldNames_push (a : Array (String × α)) (x : String × α) :
-    fieldNames (a.push x) = fieldNames a ++ [x.1] := by simp [fieldNames]
-
-private theorem fieldNames_length (a : Array (String × α)) : (fieldNames a).length = a.size := by
-  simp [fieldNames]
 
 theorem findLast?_push (a : Array (String × α)) (key : String) (v : α) (k : String) :
     findLast? (a.push (key, v)) k = if key == k then some v else findLast? a k := by
@@ -462,36 +685,6 @@ theorem setIfInBounds_self {a : Array (String × α)} {k : String} {i : Nat} {v 
   have hfield : (k, v) = a[i] := Prod.ext hkey.symm (Option.some.inj hval)
   rw [hfield, Array.setIfInBounds_getElem hi]
 
-private theorem fieldNames_drop (a : Array (String × α)) {i : Nat} (h : i < a.size) :
-    (fieldNames a).drop i = a[i].1 :: (fieldNames a).drop (i + 1) := by
-  have hi : i < (fieldNames a).length := by simpa [fieldNames_length] using h
-  rw [List.drop_eq_getElem_cons hi]
-  simp [fieldNames]
-
-private theorem distinctNamesGo (a : Array (String × α)) (i : Nat) (seen : Std.HashSet String) :
-    distinctNames.go a i seen = true ↔
-      ((fieldNames a).drop i).Nodup ∧ ∀ x ∈ (fieldNames a).drop i, seen.contains x = false := by
-  induction i, seen using distinctNames.go.induct (fields := a) with
-  | case1 i seen h k hc =>
-    rw [distinctNames.go, dif_pos h, if_pos hc, fieldNames_drop a h]
-    have hmem : a[i].1 ∈ seen := by simpa using hc
-    simp [hmem]
-  | case2 i seen h k hc ih =>
-    rw [distinctNames.go, dif_pos h, if_neg hc, ih, fieldNames_drop a h]
-    simp only [Std.HashSet.contains_insert]
-    grind
-  | case3 i seen h =>
-    have hnil : (fieldNames a).drop i = [] := by
-      apply List.drop_eq_nil_of_le
-      rw [fieldNames_length]
-      omega
-    rw [distinctNames.go, dif_neg h]
-    simp [hnil]
-
-theorem distinctNames_iff (a : Array (String × α)) :
-    distinctNames a = true ↔ (fieldNames a).Nodup := by
-  rw [distinctNames, distinctNamesGo]
-  simp
 
 theorem distinctNames_push (a : Array (String × α)) (x : String × α) :
     distinctNames (a.push x) = true ↔ distinctNames a = true ∧ findLast? a x.1 = none := by
