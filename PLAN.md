@@ -217,6 +217,7 @@ Json/FromTo.lean         ToJson / FromJson classes, instances, helpers
 Json/Query.lean          total accessors, path lookup, merge, update
 Json/Stream.lean         IO.FS.Stream helpers
 test/                    own lakefile, requires root by path, plus plausible
+test/corpus/             JSONTestSuite, vendored under its own licence
 deriving/                own lakefile, companion package, meta imports Lean
 ```
 
@@ -246,8 +247,10 @@ the quadratic cost of an unbounded significand is documented rather than hidden.
 structured, `{ byteOffset : Nat, kind : ErrorKind }`, with line and column derived on demand.
 
 Bounded-work guards: `maxNumberDigits`, because building an `Int` from a 100MB digit run is
-quadratic; `maxDepth`, as a real error rather than a crash; and a `Std.HashSet String` above a
-size threshold for duplicate detection, so adversarially wide objects stay linear.
+quadratic; `maxDepth`, as a real error rather than a crash; and a `Std.HashSet String` of the
+names seen so far, so that duplicate detection across an adversarially wide object stays linear.
+Twenty thousand members, distinct or with one repeat planted at the end, are read in the time a
+linear scan takes.
 
 ## 7. Printer
 
@@ -324,14 +327,19 @@ belongs to `.allow`.
 
 - **Totality does not imply absence of stack overflow or OOM.** "Never crashes" is achieved by
   construction and evidenced by fuzzing, not proved. Reference-counted teardown of a deeply
-  nested value is itself a runtime recursion risk and needs an empirical check.
+  nested value is a runtime recursion risk of the same kind, and it has been measured rather
+  than argued: a million-deep value is built and dropped three times over without incident, and
+  peak resident memory is the same for one round as for five, so each value is genuinely freed
+  rather than held until the process ends.
 - **`toFloat` is not verified against IEEE 754.**
 - **Extern primitives are trusted at the usual level.** `String.toUTF8` is
   `@[extern "lean_string_to_utf8"]`, though proved equal to `toByteArray` by `rfl`. We
   introduce no new trust assumptions.
-- **One conformance-corpus deviation by design.** `y_object_duplicated_key_and_value.json`
-  (`{"a":"b","a":"b"}`) is a must-accept case that strict mode rejects. We run it in
-  permissive mode and document the deviation.
+- **Two conformance-corpus deviations by design.** `y_object_duplicated_key.json`
+  (`{"a":"b","a":"c"}`) and `y_object_duplicated_key_and_value.json` (`{"a":"b","a":"b"}`) are
+  must-accept cases that strict mode rejects. Both are also run in permissive mode, which is
+  what shows the deviation to be a policy rather than an inability to read them. They are the
+  only two of the corpus's 318 files whose outcome differs from the one it asks for.
 
 ## 10. Functionality parity
 
@@ -400,6 +408,22 @@ The failure was the property's, and restating it as "a field disappears, an arra
 shorter" made it both true and stronger, since it now pins the closing of the gap that the
 first version never mentioned.
 
+Fuzzing brings a variant of the same hazard, since a sweep passes whether it found nothing wrong
+or found nothing at all. Random bytes parse so rarely, three acceptances in three thousand, that
+such a sweep tests only the refusing path; drawing mostly from the alphabet JSON is written in,
+and mostly short, raised that to sixty-eight, and the rate is now asserted rather than merely
+observed, the sweep failing if fewer than one draw in two hundred is accepted. Editing a
+well-formed document rather than starting from nothing reaches the accepting path more often
+still, at two hundred and seventy-two in three thousand.
+
+Phase 8's mutations were aimed at the new sweeps rather than at the code they cover. Decoding
+bytes lossily instead of refusing what is not UTF-8 failed both fuzz sweeps, the `n_` and `i_`
+corpus sweeps, and the byte tests; dropping the check for text after the value failed seventeen
+corpus files where four hand-written cases had covered the same ground; and parsing numbers
+without canonicalising them failed the corpus round trip and both sweeps at once. A fourth,
+narrowing the range of characters the printer escapes, never reached the tests: it fails a proof
+instead, which is where a printer mutation ought to be caught.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
@@ -408,8 +432,6 @@ No open questions. Work deliberately postponed:
   corpus rather than on proof, and the README must say so.
 - **Subquadratic digit conversion.** A divide-and-conquer `Int`-from-digits conversion would
   let `maxNumberDigits := none` be the default rather than a documented hazard, retiring D21.
-- **Reference-counted teardown of deeply nested values,** which is a runtime recursion risk
-  that no theorem of ours covers. Phase 9 establishes empirically whether it bites.
 - **Work-stack versions of `beq`, `hash` and `uniqueKeys`,** so that stack safety no longer
   depends on the parser's depth bound. See the note under constraint 4.
 - **Proofs for `dedupKeys`,** which want a small library of `Array.foldl` characterisation
@@ -537,10 +559,18 @@ No open questions. Work deliberately postponed:
       library that `dedupKeys` waits on in section 12
 
 **Phase 8. Assurance**
-- [ ] Vendor the conformance corpus under `test/`, with licence and attribution, and record
-      the documented strict-mode deviation
-- [ ] Fuzzing, including nesting depth, wide objects, huge numbers, invalid UTF-8
-- [ ] Regression cases from section 2, including the teardown check from section 9
+- [x] JSONTestSuite vendored under `test/corpus`, MIT licence and provenance beside it, all 318
+      files run, and the two duplicate-name deviations recorded and exercised both ways. The
+      `i_` cases, which the corpus leaves open, are pinned by the two rules that decide them:
+      any magnitude of number is read, and text that denotes no code points is refused
+- [x] Fuzzing: edited documents and byte soup, each 3,000 rounds from a fixed seed, checking
+      that whatever is accepted was UTF-8, has canonical numbers and unique names, and reads
+      back from both spellings. Nesting, width, digits and exponents are pinned at their exact
+      boundaries, and every byte above the ASCII range, alone or as a truncated sequence, is
+      refused
+- [x] Regressions for the rows of section 2 that the parser tests do not already carry:
+      printing 200,000 deep, member order surviving both directions, a field set on a
+      non-object, two spellings of one number that cannot disagree, and the teardown check
 
 **Phase 9. Companion package**
 - [ ] `deriving/` subproject, `deriving ToJson, FromJson`

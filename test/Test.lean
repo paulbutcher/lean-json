@@ -12,6 +12,9 @@ import Test.Printer.Soundness
 import Test.FromTo
 import Test.Query
 import Test.Stream
+import Test.Conformance
+import Test.Fuzz
+import Test.Regression
 
 namespace Test
 
@@ -20,6 +23,6 @@ namespace Test
 def all : Array TestCase :=
   Test.Number.all ++ Test.Basic.all ++ Test.Parser.all ++ Test.Printer.all ++
     Test.FromTo.all ++ Test.Query.all ++
-    Test.Stream.all
+    Test.Stream.all ++ Test.Conformance.all ++ Test.Fuzz.all ++ Test.Regression.all
 
 end Test
