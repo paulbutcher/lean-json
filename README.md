@@ -126,6 +126,10 @@ Proved:
   `==`, `compare` and `hash` agree on everything the parser produces.
 - Every number the printer is asked to write, and every number `Number.ofFloat?` produces, is
   canonical.
+- The path operations hold their laws: what `set?` puts at a path is what `get?` finds there,
+  and putting back what is already at a path leaves the value alone.
+- Deduplicating an object's field names leaves every lookup unchanged, repeats no name, and
+  leaves an object that repeats none alone.
 
 Not proved, and covered by tests instead:
 

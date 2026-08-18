@@ -3,10 +3,8 @@ Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import Json
-import Test.Runner
 
 open Json
-open Plausible (NamedBinder)
 
 namespace Test.Basic
 
@@ -102,30 +100,7 @@ example : depth (.arr #[]) = 1 := by simp [depth, depthList]
 example : depth (.obj #[("a", .arr #[.num 1])]) = 2 := by
   simp [depth, depthList, depthFields]
 
-/--
-Deduplication leaves every lookup unchanged. Stated at `Nat` values, where generators exist;
-nothing in the field helpers depends on the value type.
-
-This is a property rather than a theorem because the fold that implements `dedupKeys` needs a
-characterisation of `findLast?` over `Array.foldl` before either claim can be proved, and there
-is no such lemma library to build on yet.
--/
-abbrev dedupPreservesLookup : Prop :=
-  NamedBinder "fields" <| ∀ fields : Array (String × Nat), NamedBinder "k" <| ∀ k : String,
-    findLast? (dedupKeys fields) k = findLast? fields k
-
-abbrev dedupGivesDistinctNames : Prop :=
-  NamedBinder "fields" <| ∀ fields : Array (String × Nat),
-    distinctNames (dedupKeys fields) = true
-
-abbrev dedupIsIdempotent : Prop :=
-  NamedBinder "fields" <| ∀ fields : Array (String × Nat),
-    dedupKeys (dedupKeys fields) = dedupKeys fields
-
-def all : Array TestCase := #[
-  property "dedupKeys preserves every lookup" dedupPreservesLookup,
-  property "dedupKeys yields distinct names" dedupGivesDistinctNames,
-  property "dedupKeys is idempotent" dedupIsIdempotent
-]
+-- What deduplication does to lookup, to repeated names and to an object that has none is
+-- proved in `Test.Fold`, where the fold it is built from is characterised.
 
 end Test.Basic

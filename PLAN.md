@@ -353,6 +353,13 @@ s.toByteArray.IsValidUTF8
 -- round trip, for both compress and pretty. Waits on completeness, so property-tested
 CanonicalNumbers j → parse cfg (render j) = .ok j
 
+-- objects and paths, proved
+findLast? (dedupKeys a) k = findLast? a k
+distinctNames (dedupKeys a)
+distinctNames a → dedupKeys a = a
+j.set? p v = .ok j' → j'.get? p = some v
+j.get? p = some v → j.set? p v = .ok j
+
 -- numbers
 Canonical a → Canonical b → (Eqv a b ↔ a = b)
 ```
@@ -483,6 +490,13 @@ makes it fail. Turning the meta import into an ordinary one does not, because it
 compile at all, the module system refusing a meta declaration that reaches for a constant it
 was not given.
 
+The lemma library for array folds turned five properties into theorems, and the mutations that
+confront a theorem are aimed at the code it constrains rather than at the claim. Deduplication
+that pushes a repeated name instead of replacing it in place, lookup that keeps the first field
+of a name rather than the last, and `setObjVal?` appending where it should overwrite each fail a
+proof: the first two in the fold lemmas themselves, the third in the two path laws, which is the
+right place, since what those laws are about is an update landing where lookup will find it.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
@@ -498,8 +512,6 @@ No open questions. Work deliberately postponed:
   longer depends on the parser's depth bound. See the note under constraint 4. Generated codecs
   join the same list: they recurse on the C stack, and what protects them is the same depth
   bound, since a value that came from `parse` under the default configuration is bounded.
-- **Proofs for `dedupKeys`,** which want a small library of `Array.foldl` characterisation
-  lemmas that would also serve the parser and printer proofs.
 
 ## 13. Build order
 
@@ -537,9 +549,10 @@ No open questions. Work deliberately postponed:
 - [x] `uniqueKeys` and `UniqueKeys`, recursive through the whole value
 - [x] Total accessors, `getObjVal?` resolving duplicates last-wins, `setObjVal?` replacing in
       place, `mergeObj` via `dedupKeys`
-- [ ] `dedupKeys` correctness is covered by three properties, not proved. Both claims need a
-      characterisation of `findLast?` over `Array.foldl` first, and there is no lemma library for
-      array folds to build on yet
+- [x] `dedupKeys` correctness proved: every lookup survives it, the result repeats no name,
+      and an object that repeats none is left alone, from which idempotence follows. The
+      lemmas the proofs rest on are in `test/Test/Fold.lean`, which describes a field array
+      one `push` at a time
 - [ ] Stack-safe traversal primitive. See the note on constraint 4 below; the termination lemma it
       needs, `(l.map sizeOf).sum < sizeOf l`, is proved out and ready to use
 
@@ -617,11 +630,12 @@ No open questions. Work deliberately postponed:
 - [x] `ToString` for `ErrorKind` and `Error`, so a failure reads as a sentence rather than as a
       constructor, and a field name from the input is described rather than echoed when long
 - [x] Stream helpers per D30: `readJson`, `readJsonToEnd`, `writeJson`, `writeJsonPretty`
-- [x] 41 tests: lookup, update, removal and typed access, the error messages, the stream pair
-      in both directions, and three properties, each confirmed by a mutation
-- [ ] The API laws stay properties rather than theorems. `get? (set? j p v) p = some v` needs a
-      characterisation of `findLast?` over a set array, which is the same `Array.foldl` lemma
-      library that `dedupKeys` waits on in section 12
+- [x] 39 tests: lookup, update, removal and typed access, the error messages, the stream pair
+      in both directions, and one property, confirmed by a mutation
+- [x] Two of the three API laws are theorems: what is set is what is got, and putting back
+      what is already at a path changes nothing. Removal keeps its property, since the half
+      of the claim about an index is about the length of the array at the path's prefix,
+      which wants lemmas relating a lookup at a prefix to an update made below it
 
 **Phase 8. Assurance**
 - [x] JSONTestSuite vendored under `test/corpus`, MIT licence and provenance beside it, all 318
