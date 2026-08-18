@@ -286,12 +286,20 @@ theorem cmp_eq_eq_iff_eq {a b : Number} (ha : Canonical a) (hb : Canonical b) :
     cmp a b = .eq ↔ a = b :=
   cmp_eq_eq_iff_eqv.trans (eqv_iff_eq ha hb)
 
-/-- The integer `n` denotes, when it denotes one of at most `maxDigits` digits. -/
-def toInt? (n : Number) (maxDigits : Nat := 1000) : Option Int :=
+/--
+The integer `n` denotes, when it denotes one and writing it out costs at most `maxPadding`
+zeros beyond the digits already present in the mantissa.
+
+The bound is on the padding rather than on the result, because the cost that has to be
+refused is the one a short text can inflict: `1e1000000000` is twelve characters and an
+integer of a billion digits. A mantissa that is itself long has already been paid for by
+whoever holds it, so it passes.
+-/
+def toInt? (n : Number) (maxPadding : Nat := 1000) : Option Int :=
   if n.mantissa = 0 then
     some 0
   else if 0 ≤ n.exponent then
-    if (digitCount n.mantissa : Int) + n.exponent ≤ maxDigits then
+    if n.exponent ≤ (maxPadding : Int) then
       some (n.mantissa * 10 ^ n.exponent.toNat)
     else
       none
@@ -305,8 +313,8 @@ def toInt? (n : Number) (maxDigits : Nat := 1000) : Option Int :=
     else
       none
 
-def toNat? (n : Number) (maxDigits : Nat := 1000) : Option Nat :=
-  match n.toInt? maxDigits with
+def toNat? (n : Number) (maxPadding : Nat := 1000) : Option Nat :=
+  match n.toInt? maxPadding with
   | some i => if 0 ≤ i then some i.toNat else none
   | none => none
 
@@ -327,6 +335,34 @@ def toFloat (n : Number) : Float :=
     else if 400 < e then sign * (1.0 / 0.0)
     else if e < 0 then sign * OfScientific.ofScientific m true (-e).toNat
     else sign * OfScientific.ofScientific m false e.toNat
+
+/--
+The exact value of `x`, or `none` for a NaN or an infinity, neither of which JSON can express.
+
+A `Float` is `m * 2 ^ e` for integers `m` and `e`, and every such value has a finite decimal
+expansion, because `2 ^ e = 5 ^ -e * 10 ^ e` when `e` is negative. So the conversion is exact,
+at the cost of being long: fifty significant digits is ordinary and a subnormal reaches several
+hundred. The alternative, converting through the shortest decimal spelling a `Float` prints,
+loses the value outright for small magnitudes.
+-/
+def ofFloat? (x : Float) : Option Number :=
+  let bits := x.toBits.toNat
+  let frac := bits % 0x10000000000000
+  let biased := bits / 0x10000000000000 % 0x800
+  -- A subnormal has no implicit leading bit, and takes the exponent of the smallest normal.
+  let m : Nat := if biased = 0 then frac else frac + 0x10000000000000
+  let e : Int := if biased = 0 then -1074 else (biased : Int) - 1075
+  let signed : Int := if 0x8000000000000000 ≤ bits then -(m : Int) else (m : Int)
+  if biased = 0x7FF then none
+  else if 0 ≤ e then some (normalize (signed * 2 ^ e.toNat) 0)
+  else some (normalize (signed * 5 ^ (-e).toNat) e)
+
+theorem canonical_ofFloat {x : Float} {n : Number} (h : ofFloat? x = some n) : Canonical n := by
+  simp only [ofFloat?] at h
+  repeat' split at h
+  all_goals first
+    | (injection h with h; exact h ▸ canonical_normalize _ _)
+    | simp at h
 
 end Number
 

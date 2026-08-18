@@ -9,3 +9,4 @@ public import Json.Basic
 public import Json.Spec
 public import Json.Parser
 public import Json.Printer
+public import Json.FromTo

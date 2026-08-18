@@ -52,6 +52,7 @@ Measured against `Lean.Data.Json` on Lean v4.33.0. Each becomes a regression tes
 | any object | Key order lost, since the payload is a `Std.TreeMap.Raw`. |
 | deeply nested value | `render` and `pretty` are `partial` and recursive, so output overflows even when parsing survived. `compress` is already iterative. |
 | `setObjVal!` on a non-object | Panics. |
+| `toJson (1e-300 : Float)` | Silently becomes `0`, as does every value below about `1e-7`. The encoder parses `Float.toString`, which is fixed point, so the digits are simply not there. The same path calls `panic!` if the parse ever fails. |
 | `⟨15,1⟩` vs `⟨150,2⟩` | `==` is `false` while `compare` is `.eq`, and the hashes differ. Incoherent `BEq`/`Ord` pair on one type. |
 
 The duplicate-key case is not academic: a 2017 CouchDB RCE arose because JavaScript and
@@ -146,6 +147,24 @@ saw `"roles": ["_admin"]`.
   `test/`.
 - **D23. Pretty-printing defaults are a two-space indent, 80-column width, one space after
   `:`, and no spaces anywhere in `compress`.** Core's exact layout is not matched.
+- **D24. The codec classes live in the `Json` namespace,** as `Json.ToJson` and
+  `Json.FromJson`, rather than at the top level. `open Json` gives the familiar spelling, and
+  a file that also uses core's classes can still name both.
+- **D25. `toInt?` and `toNat?` bound the padding, not the digit count.** The cost worth
+  refusing is the one a short text can inflict, `1e1000000000` being twelve characters and an
+  integer of a billion digits; a mantissa that is long in itself has already been paid for by
+  whoever holds it. The parameter is `maxPadding`, still defaulting to 1000, and the change is
+  what lets `fromJson? (toJson n) = .ok n` be a theorem rather than a hope.
+- **D26. `Float` is converted exactly, through its bits, not through its printed form.** A
+  `Float` is `m * 2 ^ e`, and `2 ^ e = 5 ^ -e * 10 ^ e` for negative `e`, so every one of them
+  has a finite decimal expansion that costs one bignum multiply to compute. Going through
+  `Float.toString` instead is what makes core turn `1e-300` into `0`. The price is length,
+  around fifty significant digits where a shortest spelling would use seventeen, and a few
+  hundred for a subnormal. NaN and the infinities keep the customary `"NaN"`, `"Infinity"` and
+  `"-Infinity"` strings, since JSON has no other way to carry them.
+- **D27. Nothing in the codecs may panic, so `setObjValAs!` becomes `setObjValAs?`,** and the
+  field names `parseTagged` and `parseCtorFields` take are `String`s rather than `Name`s, the
+  latter being out of reach under constraint 3.
 
 ## 4. Data model
 
@@ -182,8 +201,8 @@ Json/Spec.lean           RFC 8259 grammar as an inductive Prop
 Json/Parser.lean         iterative parser, Config, structured Error
 Json/Parser/Lemmas.lean  soundness, completeness, UniqueKeys
 Json/Printer.lean        compress, pretty, escaping, number rendering
-Json/Query.lean          total accessors, path lookup, merge, update
 Json/FromTo.lean         ToJson / FromJson classes, instances, helpers
+Json/Query.lean          total accessors, path lookup, merge, update
 Json/Stream.lean         IO.FS.Stream helpers
 test/                    own lakefile, requires root by path, plus plausible
 deriving/                own lakefile, companion package, meta imports Lean
@@ -307,17 +326,17 @@ belongs to `.allow`.
 Tracked against `Lean.Data.Json` so that "same functionality" is checkable rather than
 aspirational.
 
-- [ ] `Number`: `toString`, `Ord`, `Neg`, `OfScientific`, `OfNat`, shifts, `toFloat`,
-      `ofFloat?`, bounded `toInt?` / `toNat?` — all but `ofFloat?`
+- [x] `Number`: `toString`, `Ord`, `Neg`, `OfScientific`, `OfNat`, shifts, `toFloat`,
+      `ofFloat?`, bounded `toInt?` / `toNat?`
 - [x] `Json`: `DecidableEq`, `Hashable`, `Inhabited`, `Repr`, coercions, `mkObj`, `isNull`
 - [ ] Accessors: `getObj?`, `getArr?`, `getStr?`, `getNat?`, `getInt?`, `getBool?`, `getNum?`,
       `getObjVal?`, `getArrVal?`, `getObjValD`, `setObjVal`, `mergeObj`, `Structured`
 - [x] `parse`, `parseBytes`
 - [x] `compress`, `pretty`, `escape`, `renderString`, `ToString`
-- [ ] `FromJson` / `ToJson` plus instances: `Json`, `Number`, `Unit`, `Empty`, `Bool`, `Nat`,
+- [x] `FromJson` / `ToJson` plus instances: `Json`, `Number`, `Unit`, `Empty`, `Bool`, `Nat`,
       `Int`, `String`, `String.Slice`, `FilePath`, `Array`, `List`, `Option`, `Prod`, `USize`,
       `UInt64`, `Float`, `Structured`, `Std.TreeMap String`
-- [ ] Helpers: `getObjValAs?`, `setObjValAs`, `opt`, `getTag?`, `parseTagged`,
+- [x] Helpers: `getObjValAs?`, `setObjValAs?`, `opt`, `getTag?`, `parseTagged`,
       `parseCtorFields`, `bignumFromJson?`, `bignumToJson`, `toStructured?`
 - [ ] Stream helpers: `readJson`, `writeJson`
 - [ ] Companion package: `deriving ToJson, FromJson`, `json%`
@@ -347,7 +366,10 @@ the first duplicate-name property was assembled from random tokens and passed ag
 whose duplicate check had been deleted, because random tokens form parseable JSON far too rarely
 to reach the check; in Phase 5 the round-trip properties survived a printer that put the decimal
 point in the wrong place, because the generated numbers almost never had more digits than the
-exponent asked for, so the branch that positions the point was hardly ever reached. Generators
+exponent asked for, so the branch that positions the point was hardly ever reached. The Phase 6
+float property had the same shape of hole, caught before it could hide anything: a bit pattern
+taken from a small natural has a zero exponent field, so every value drawn was subnormal and no
+ordinary number was ever tested. Generators
 must build well-formed input by construction, draw from an alphabet small enough that the
 interesting collisions occur, and be shaped so that every branch of the code under test is
 reachable. The mutation test is what demonstrates they are.
@@ -397,8 +419,8 @@ No open questions. Work deliberately postponed:
       revision to D3: `LawfulEqCmp` is unattainable and is not claimed
 - [x] Bounded conversions: `toInt?`, `toNat?`, `toFloat`, all guarded against exponent expansion
 - [x] `toString`, landed in Phase 5 where the rendering rule belongs
-- [ ] `ofFloat?` deferred to Phase 6, since it decodes a float's decimal spelling and so wants
-      the parser
+- [x] `ofFloat?`, landed in Phase 6. It wants no parser after all: reading the IEEE fields is
+      both exact and cheaper than reading back a printed decimal, per D26
 - [ ] The scale comparison inside `isLt` is covered by two properties rather than proved. Closing
       it needs digit-count bounds, `10 ^ (digitCount m - 1) ≤ m.natAbs < 10 ^ digitCount m`
 
@@ -465,7 +487,22 @@ No open questions. Work deliberately postponed:
       does not depend on it
 
 **Phase 6. Codecs**
-- [ ] `FromJson` / `ToJson`, instances, helpers, `parseTagged` and friends
+- [x] `ToJson` / `FromJson` in the `Json` namespace, per D24, with instances for `Json`,
+      `Number`, `Bool`, `String`, `String.Slice`, `Nat`, `Int`, `Unit`, `Empty`, `FilePath`,
+      `Array`, `List`, `Option`, `Prod`, `USize`, `UInt64`, `Float`, `Structured` and
+      `Std.TreeMap String`
+- [x] `Number.ofFloat?`, exact by way of the IEEE fields, per D26, with `Canonical` proved of
+      its result
+- [x] Helpers: `getObjValAs?`, `setObjValAs?`, `opt`, `getTag?`, `parseTagged`,
+      `parseCtorFields`, `bignumToJson`, `bignumFromJson?`, `decodeNat?`, `toStructured?`
+- [x] Round trips proved for `Json`, `Number`, `Bool`, `String` and `Unit`, and for `Int` and
+      `Nat` under the padding bound of D25. `Option` and `Prod` are proved from the round trips
+      of what they contain, `Option` needing the value not to encode as `null`, which is what
+      `Option (Option α)` violates
+- [x] 54 tests: encodings, decoding failures, the helpers, the float edge cases that core loses,
+      and five properties, each confirmed by a mutation that ought to fail it
+- [ ] `Array` and `List` round trips are property-tested, not proved: the instances go through
+      `Array.mapM`, and there is no characterisation of it to induct on yet
 
 **Phase 7. Ergonomics**
 - [ ] `Query`, path lookup, updates
