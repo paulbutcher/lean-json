@@ -19,10 +19,11 @@ open Lean.Elab.Deriving
 Handlers for `deriving ToJson, FromJson`.
 
 Neither generated function is `partial`. An encoder recurses on the value, which is structural.
-A decoder recurses on the text, where nothing tells Lean that a field is smaller than the value
-it came out of, so it takes a count instead, and the instance passes the depth of what it was
-handed. That count is never what stops it: every step descends at least one level, so it cannot
-run out before the value does.
+A decoder for a recursive type recurses on the text, where nothing tells Lean that a field is
+smaller than the value it came out of, so it takes a count instead, and the instance passes the
+depth of what it was handed. That count is never what stops it: every step descends at least one
+level, so it cannot run out before the value does. A type that cannot recurse gets neither the
+count nor the traversal that works out what it should be.
 -/
 
 private meta def mentions (indName : Name) (type : Expr) : Bool :=
@@ -264,10 +265,15 @@ private meta def mkFromJsonCmds (declName : Name) : TermElabM (Array Command) :=
   let indVal ← theOnlyType ctx declName
   let aux := mkIdent ctx.auxFunNames[0]!
   let header ← mkHeader ``_root_.Json.FromJson 0 indVal
-  let fuel := mkIdent (← mkFreshUserName `fuel)
+  -- Only a recursive type needs the count, and computing the depth to seed it is a traversal of
+  -- its own, so a decoder that cannot recurse does not carry one.
+  let counted := indVal.isRec
+  let fuel := mkIdent (← mkFreshUserName `count)
   let json := mkIdent (← mkFreshUserName `json)
-  let binders := header.binders.push (← `(bracketedBinderF|($fuel : Nat)))
-    |>.push (← `(bracketedBinderF|($json : _root_.Json)))
+  let countBinder ← `(bracketedBinderF|($fuel : Nat))
+  let jsonBinder ← `(bracketedBinderF|($json : _root_.Json))
+  let binders := if counted then header.binders.push countBinder else header.binders
+  let binders := binders.push jsonBinder
   let resultType ← mkInductiveApp indVal header.argNames
   let body ← Term.elabBinders binders fun _ => do
     if isStructure (← getEnv) declName then
@@ -277,17 +283,24 @@ private meta def mkFromJsonCmds (declName : Name) : TermElabM (Array Command) :=
   let exhausted := Lean.quote
     s!"a value nested deeper than the derived decoder for {declName} was prepared to go"
   let auxCmd ←
-    `(def $aux:ident $binders:bracketedBinder* : Except String $resultType :=
-        match $fuel:ident with
-        | 0 => Except.error $exhausted
-        | $fuel:ident + 1 => $body)
+    if counted then
+      `(def $aux:ident $binders:bracketedBinder* : Except String $resultType :=
+          match $fuel:ident with
+          | 0 => Except.error $exhausted
+          | $fuel:ident + 1 => $body)
+    else
+      `(def $aux:ident $binders:bracketedBinder* : Except String $resultType := $body)
   let argNames ← mkInductArgNames indVal
   let instBinders := (← mkImplicitBinders argNames) ++
     (← mkInstImplicitBinders ``_root_.Json.FromJson indVal argNames)
   let instType ← `(_root_.Json.FromJson $(← mkInductiveApp indVal argNames))
   let instCmd ←
-    `(instance $(mkIdent ctx.instName):ident $instBinders:bracketedBinder* : $instType :=
-        ⟨fun j => $aux (_root_.Json.depth j + 1) j⟩)
+    if counted then
+      `(instance $(mkIdent ctx.instName):ident $instBinders:bracketedBinder* : $instType :=
+          ⟨fun j => $aux (_root_.Json.depth j + 1) j⟩)
+    else
+      `(instance $(mkIdent ctx.instName):ident $instBinders:bracketedBinder* : $instType :=
+          ⟨$aux⟩)
   return #[auxCmd, instCmd]
 
 meta def toJsonHandler (declNames : Array Name) : CommandElabM Bool := do

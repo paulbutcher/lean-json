@@ -148,21 +148,23 @@ machine, best of three, so useful for tracking rather than for comparing machine
 
 | Document | Size | parse | compress | pretty | core parse |
 |---|---|---|---|---|---|
-| numbers | 311K | 10.3ms | 11.5ms | 13.4ms | 7.7ms |
-| wide object | 915K | 17.9ms | 7.5ms | 10.1ms | 16.0ms |
-| strings | 1063K | 18.3ms | 5.4ms | 6.4ms | 6.7ms |
-| records | 1442K | 32.1ms | 25.4ms | 39.6ms | 17.7ms |
-| nesting, 20,000 deep | 39K | 0.6ms | 1.9ms | - | 0.9ms |
+| numbers | 311K | 10.3ms | 11.8ms | 13.6ms | 8.6ms |
+| wide object | 915K | 18.8ms | 7.1ms | 9.4ms | 17.2ms |
+| strings | 1063K | 13.6ms | 5.4ms | 6.4ms | 6.9ms |
+| records | 1442K | 34.8ms | 23.4ms | 36.4ms | 18.4ms |
+| nesting, 20,000 deep | 39K | 0.6ms | 1.8ms | - | 0.9ms |
 
-Reading runs at 30 to 57 MB/s, between roughly level with core and about twice its time, and the
+Reading runs at 30 to 77 MB/s, between level with core and about twice its time, and the
 difference is where the work is: duplicate names are checked, numbers are canonicalised, and depth
-is counted.
+is counted. Encoding and decoding are timed too: 20,000 records go to JSON in 4.4ms and come back
+in 3.2ms.
 
-Memory is the number worth watching, and `bench/` reports it: reading a 7MB document costs about
-four bytes of peak resident memory per byte of text, which is the text and the value and little
-else. The scanner walks the string by position rather than converting it to a list of characters
-first, which had cost about thirty bytes a character and put a ceiling on what could safely be
-read.
+Memory is the number worth watching, and `bench/` reports it on two documents, because two
+different things are being paid for. A document that is nearly all text and almost no value, a
+single six megabyte string, costs about two bytes of peak resident memory per byte of text: that
+is the scanner, which walks the string by position rather than converting it to a list of
+characters first. A document that is nearly all value, 100,000 records, costs about six, and the
+difference is the value itself, which no scanner can help with.
 
 ## Building
 

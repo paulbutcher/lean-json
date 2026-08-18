@@ -3,6 +3,7 @@ Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import Json
+import JsonDeriving
 import Lean.Data.Json
 
 /-!
@@ -86,6 +87,48 @@ private def records (n : Nat) : String :=
 
 private def nested (n : Nat) : String := "".pushn '[' n ++ "1" ++ "".pushn ']' n
 
+/-! ## Codecs
+
+Encoding and decoding are timed apart from the text, because a derived instance can do work that
+neither parsing nor printing does and nothing else here would show it.
+-/
+
+structure Row where
+  id : Nat
+  name : String
+  ok : Bool
+deriving Json.ToJson, Json.FromJson
+
+inductive Tree where
+  | leaf (value : Nat)
+  | node (children : Array Tree)
+deriving Json.ToJson, Json.FromJson
+
+private def rows (n : Nat) : Array Row :=
+  (Array.range n).map fun i => { id := i, name := s!"row {i}", ok := i % 2 == 0 }
+
+private def tree : Nat → Tree
+  | 0 => .leaf 0
+  | n + 1 => .node #[tree n, tree n]
+
+private def codecs : IO Unit := do
+  -- Each round is given its own value for the reason `best` explains, and they differ in size by
+  -- one element so that no two rounds can share the work between them.
+  let rowSets := (Array.range 3).map fun i => rows (20000 + i)
+  let (rowsOut, encoded) ← best rowSets Json.toJson (fun j => Json.depth j) .null
+  let (rowsIn, _) ← best ((Array.range 3).map fun i => Json.toJson (rows (20000 + i)))
+    (fun j => Json.fromJson? (α := Array Row) j) (fun r => if r.toOption.isSome then 1 else 0)
+    (.error "")
+  let trees := (Array.range 3).map fun i => tree (13 + i % 2)
+  let (treeOut, _) ← best trees Json.toJson (fun j => Json.depth j) .null
+  let (treeIn, _) ← best (trees.map Json.toJson)
+    (fun j => Json.fromJson? (α := Tree) j) (fun r => if r.toOption.isSome then 1 else 0)
+    (.error "")
+  IO.println s!"{pad "20,000 records" 20}toJson {pad (ms rowsOut ++ "ms") 10}\
+fromJson? {pad (ms rowsIn ++ "ms") 10}as text {(Json.compress encoded).utf8ByteSize / 1024}K"
+  IO.println s!"{pad "a tree of 8,191" 20}toJson {pad (ms treeOut ++ "ms") 10}\
+fromJson? {pad (ms treeIn ++ "ms") 10}"
+
 /-! ## The run -/
 
 private structure Case where
@@ -123,27 +166,33 @@ pretty {pad (if c.layout then ms prettyTime ++ "ms" else "-") 9}\
 core parse {core}"
 
 /--
-What one byte of text costs while it is being read. The scanner works over a `List Char`, which
-the whole input is converted to first, and this is the number that says why that has to change:
-it is a limit on the size of document that can safely be read, whatever the timings say.
+What one byte of text costs while it is being read.
 
-The document is the largest in the run and comes last, so that the high water mark it leaves is
-its own.
+Two documents, because there are two things being paid for. A long string is nearly all text and
+almost no value, so its figure is the scanner's: this is the number that was about thirty when
+the whole input was converted to a list of characters first, and the reason that had to change.
+The records document is the other end, where most of what is held is the value, which no scanner
+can do anything about.
+
+They run first, because the figure is a rise in the high water mark, and a mark already raised by
+everything else would hide it.
 -/
-private def amplification : IO Unit := do
-  let before := (← peakBytes).getD 0
-  let text := records 100000
+private def amplification (name : String) (text : String) : IO Unit := do
   let bytes := text.utf8ByteSize
+  -- Taken once the text exists, so that what it measures is the reading and not the building.
+  let before := (← peakBytes).getD 0
   match Json.parse text with
-  | .error e => IO.println s!"the document was refused: {e}"
+  | .error e => IO.println s!"the {name} document was refused: {e}"
   | .ok value =>
     let after := (← peakBytes).getD 0
     if after ≤ before || bytes == 0 then
-      IO.println "peak resident memory did not rise, so there is nothing to report"
+      IO.println s!"{pad name 16}reading it did not raise the high water mark"
     else
-      IO.println s!"reading {bytes / 1048576}M of text cost {(after - before) / 1048576}M of \
-peak resident memory, about {(after - before) / bytes} bytes a character, at depth \
-{Json.depth value}"
+      IO.println s!"{pad name 16}{bytes / 1048576}M of text cost \
+{(after - before) / 1048576}M of peak resident memory, about {(after - before) / bytes} bytes \
+a character, at depth {Json.depth value}"
+
+private def longString : String := "[\"" ++ "".pushn 'a' 7000000 ++ "\"]"
 
 def main : IO Unit := do
   let cases : List Case := [
@@ -154,13 +203,16 @@ def main : IO Unit := do
     -- Past the default depth limit, so this one lifts it.
     { name := "nesting", text := nested 20000, cfg := { maxDepth := none }, layout := false }
   ]
+  amplification "a long string" longString
+  amplification "records" (records 100000)
   IO.println "best of three"
   for c in cases do
     report c
+  IO.println "codecs, best of three"
+  codecs
   match ← peakBytes with
   | some peak => IO.println s!"peak resident memory so far: {peak / 1048576}M"
   | none => pure ()
-  amplification
 
 end Bench
 

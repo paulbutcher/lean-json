@@ -143,17 +143,23 @@ structure Consumed (α : Type) (start : s.Pos) where
 
 /-! ## Leaf scanners -/
 
-def skipWs (p : s.Pos) : Consumed Unit p :=
-  match hc : step? p with
-  | some (c, q) =>
-    if Spec.isWs c then
-      let r := skipWs q
-      ⟨(), r.pos, by have := r.notLonger; have := step?_lt hc; omega⟩
-    else
-      ⟨(), p, Nat.le_refl _⟩
-  | none => ⟨(), p, Nat.le_refl _⟩
-termination_by p.remainingBytes
-decreasing_by exact step?_lt hc
+/--
+Whitespace, if there is any.
+
+Written as a loop over a position that carries how far it has come, rather than as a recursion
+whose result is rebuilt on the way out, so that a long run costs no stack and holds nothing per
+character.
+-/
+def skipWs (start : s.Pos) : Consumed Unit start := go start (Nat.le_refl _)
+where
+  go (p : s.Pos) (h : p.remainingBytes ≤ start.remainingBytes) : Consumed Unit start :=
+    match hc : step? p with
+    | some (c, q) =>
+      if Spec.isWs c then go q (by have := step?_lt hc; omega)
+      else ⟨(), p, h⟩
+    | none => ⟨(), p, h⟩
+  termination_by p.remainingBytes
+  decreasing_by exact step?_lt hc
 
 /-- The characters of `l` in order, if the text at `p` begins with them. -/
 def expect? (p : s.Pos) : List Char → Option (Consumed Unit p)
@@ -285,32 +291,41 @@ def stringStep (p : s.Pos) : StringStep p :=
     if Spec.isUnescaped c then .char c q (step?_lt hc)
     else .fail ⟨byteOffset p, .controlCharInString c⟩
 
-/-- The contents of a string, starting just after the opening quotation mark. -/
-def string (p : s.Pos) (acc : String) : Except Error (Scanned String p) :=
-  match hs : stringStep p with
-  | .fail e => .error e
-  | .done q hq => .ok ⟨acc, q, hq⟩
-  | .char c q hq =>
-    match string q (acc.push c) with
-    | .error e => .error e
-    | .ok t => .ok ⟨t.value, t.pos, by have := t.consumed; omega⟩
-termination_by p.remainingBytes
-decreasing_by exact hq
+/--
+The contents of a string, starting just after the opening quotation mark.
+
+A loop rather than a recursion that rebuilds its result on the way out: a string of a million
+characters would otherwise hold a frame and a step apiece until the closing quotation mark.
+-/
+def string (start : s.Pos) (acc : String) : Except Error (Scanned String start) :=
+  go start acc (Nat.le_refl _)
+where
+  go (p : s.Pos) (acc : String) (h : p.remainingBytes ≤ start.remainingBytes) :
+      Except Error (Scanned String start) :=
+    match hs : stringStep p with
+    | .fail e => .error e
+    | .done q hq => .ok ⟨acc, q, by omega⟩
+    | .char c q hq => go q (acc.push c) (by omega)
+  termination_by p.remainingBytes
+  decreasing_by exact hq
 
 /-! ## Numbers -/
 
-/-- `*DIGIT`, accumulating the most significant digit first. -/
-def digits (p : s.Pos) (value count : Nat) : Consumed (Nat × Nat) p :=
-  match hc : step? p with
-  | some (c, q) =>
-    if Spec.isDigit c then
-      let r := digits q (value * 10 + Spec.digitVal c) (count + 1)
-      ⟨r.value, r.pos, by have := r.notLonger; have := step?_lt hc; omega⟩
-    else
-      ⟨(value, count), p, Nat.le_refl _⟩
-  | none => ⟨(value, count), p, Nat.le_refl _⟩
-termination_by p.remainingBytes
-decreasing_by exact step?_lt hc
+/-- `*DIGIT`, accumulating the most significant digit first, and as a loop for the same reason. -/
+def digits (start : s.Pos) (value count : Nat) : Consumed (Nat × Nat) start :=
+  go start value count (Nat.le_refl _)
+where
+  go (p : s.Pos) (value count : Nat) (h : p.remainingBytes ≤ start.remainingBytes) :
+      Consumed (Nat × Nat) start :=
+    match hc : step? p with
+    | some (c, q) =>
+      if Spec.isDigit c then
+        go q (value * 10 + Spec.digitVal c) (count + 1) (by have := step?_lt hc; omega)
+      else
+        ⟨(value, count), p, h⟩
+    | none => ⟨(value, count), p, h⟩
+  termination_by p.remainingBytes
+  decreasing_by exact step?_lt hc
 
 /-- `int = zero / ( digit1-9 *DIGIT )`. A leading zero stands alone, so `01` is two tokens. -/
 def intPart (p : s.Pos) : Except Error (Scanned (Nat × Nat) p) :=

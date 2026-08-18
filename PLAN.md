@@ -157,7 +157,9 @@ saw `"roles": ["_admin"]`.
   `Nat`, spends one per level, and the instance seeds it with `Json.depth j + 1`, which is
   always enough because every member is strictly shallower than its container. Running out is
   an error rather than a wrong answer, so the failure mode is honest even if that reasoning
-  were ever wrong. Encoders need none of this: recursion on the value is structural.
+  were ever wrong. Encoders need none of this: recursion on the value is structural. Only a
+  recursive type is given the count, since seeding it means measuring the depth, and that is a
+  traversal a decoder which cannot recurse has no use for.
 - **D33. Recursion is generated for a field of the derived type, or an `Array`, `List` or
   `Option` of it, and refused for anything else,** with an error naming the field. A type
   mentioning itself under `Prod`, a map, or another type constructor is rare, and a clear
@@ -265,6 +267,15 @@ scanner was two to three times *slower* than the list one, because every charact
 `Option` and a pair; with it the constructor and the match that consumes it are fused away and the
 same code is 1.4 times faster than the list version, at 30 to 57 MB/s against core's 40 to 160.
 The lesson generalises to anything returning a small structure per input element.
+
+**The scanning loops are loops, not recursions that rebuild their result on the way out.** Each
+takes the position it started from and carries how far it has come, so the recursive call is in
+tail position and compiles to a jump. Written the other way, with the result reassembled at each
+level, a six megabyte string cost 445MB of peak resident memory, 66 bytes a character, because a
+frame and a step object stayed live for every character until the closing quotation mark. As a
+loop the same document costs 16MB, and reading it is a third faster. The benchmark is what found
+this: the document was added precisely because it is nearly all text and almost no value, which
+is the shape that isolates what the scanner costs.
 
 Errors carry a byte offset, which is what a position gives directly; a character offset would have
 to be counted separately, and byte offsets are what a caller indexes the input with anyway.
@@ -642,8 +653,9 @@ No open questions. Work deliberately postponed:
 
 **Phase 10. Release**
 - [x] `bench/`, its own subproject and the one place allowed to import the Lean package, timing
-      reading and writing beside `Lean.Data.Json` on the same five documents, and measuring what
-      a byte of text costs in resident memory while it is being read
+      reading and writing beside `Lean.Data.Json` on the same five documents, the codecs and the
+      derived instances separately, and what a byte of text costs in resident memory while it is
+      being read, on one document that is nearly all text and one that is nearly all value
 - [x] README: what it fixes, how to use it, the duplicate-name default and the CouchDB
       escalation that argues for it, what is proved against what is only tested, and the memory
       amplification stated as the blocker it is

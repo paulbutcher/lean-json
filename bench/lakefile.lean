@@ -9,6 +9,7 @@ package bench where
   leanOptions := #[⟨`warningAsError, true⟩]
 
 require json from ".."
+require jsonDeriving from "../deriving"
 
 -- A subproject, like the tests, so that nothing here reaches a consumer. It is the one place
 -- allowed to import the Lean package, since comparing against `Lean.Data.Json` is the point.
