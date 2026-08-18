@@ -302,6 +302,22 @@ rests on: at the start the suffix is the whole text, and one step takes exactly 
 the front. So a scanner stated over positions is proved against a grammar stated over lists
 without either side bending to the other, and without an axiom about strings.
 
+**What the stack owes.** The machine holds unfinished arrays and objects in frames, so the text
+still to be read has to finish every frame on the stack before any of it is a derivation.
+`Closes` says what that amounts to, by recursion on the stack: an array frame wants the elements
+after the one just read and then the closing bracket, an object frame the members and the closing
+brace, and each hands the value it completes to the frame outside it, with the empty stack
+wanting nothing and taking the value as the answer. Soundness of `value` is then "there is a
+derivation here, whose value the stack closes into the result", and the three functions prove it
+together by one induction on the bytes left, since every call any of them makes is at a position
+strictly further on.
+
+**The byte order mark is not part of a text.** `parse` decides the mark and hands the rest to
+`parseFrom`, which reads one value with whitespace either side and refuses anything after it.
+Splitting them keeps the mark out of the theorem, where the grammar has no production for it:
+what is proved of `parseFrom` is `Spec.Text` of the characters from wherever it starts, and
+`text_parse` says which of the two texts that is rather than passing over the difference.
+
 Errors carry a byte offset, which is what a position gives directly; a character offset would have
 to be counted separately, and byte offsets are what a caller indexes the input with anyway.
 
@@ -358,14 +374,19 @@ exactly as the ABNF is not: `12` derives as `1` with `2` left over. Determinism 
 `Text`, where the remainder must be empty, and proving it is the outstanding Phase 3 item.
 
 ```lean
--- soundness: no false accepts, in every mode. Stated modulo the BOM, per D18,
+-- soundness: no false accepts, in every mode. Proved. Stated modulo the BOM, per D18,
 -- since the grammar has no BOM production
-parse cfg s = .ok j → Spec.Text (stripBOM s).toList j
+cfg.ignoreBOM = false → parse s cfg = .ok j → Spec.TextOf s j
+parse s cfg = .ok j → ∃ t, Spec.Text t j ∧ (s.toList = t ∨ s.toList = Char.ofNat 0xFEFF :: t)
 
--- the leaves of that, proved, over `remaining p`, the characters left at a position
+-- what it rests on: the leaves, over `remaining p`, the characters left at a position
 Spec.Ws (remaining p) (remaining (skipWs p).pos)
 number cfg p = .ok r → Spec.Num (remaining p) r.value (remaining r.pos)
 step? p = some ('"', q) → string q "" = .ok r → Spec.Str (remaining p) r.value (remaining r.pos)
+
+-- and the machine, where `Closes` says what the frames still on the stack demand of the text
+value cfg p depth stack = .ok (j, rp) →
+  ∃ v t, Spec.Value (remaining p) v t ∧ Closes stack v t j (remaining rp)
 
 -- completeness, per duplicate-key policy. v2, per D14
 Spec.Value bs j → parse .allow bs = .ok j
@@ -555,6 +576,20 @@ is worth re-reading before it is acted on: what blocked it may have been fixed u
 never have been a blocker. The mutations are aimed at the codec rather than the claim: a decoder
 that drops the last element, and an encoder that reverses the array, each fail the proof.
 
+The machine's soundness proof was confronted with three mutations of the parser, and two of them
+are the clearest evidence yet for the rule. Letting an array close on `}` as well as `]`, or an
+object on `]` as well as `}`, makes `[1}` read as `[1]` and `{"a":1]` read as that object; the
+proof fails to compile, because no `EndArray` derivation begins with a brace, while the suite
+passes unchanged, all 222 tests and all 46 in the companion, the 318 corpus files among them. It
+covers mismatched brackets only where the text is truncated, and never where one closer stands
+in for the other. The third, letting text after the value through, fails the proof at `Ws t []`
+and also fails five tests, so there the two agree.
+
+Since the proof of a mutated parser does not compile, measuring what the tests alone would have
+caught means building without `Json/Parser/Soundness.lean` and without the names
+`test/Test/Api.lean` holds it to. That the two can be separated so easily is worth remembering:
+it is the only way to ask what the tests are worth on their own.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
@@ -647,11 +682,15 @@ No open questions. Work deliberately postponed:
 - [x] Every leaf scanner proved sound against its production: whitespace, the literals through
       `expect?`, digits and each part of a number, the hex escapes, the two-character escapes,
       code points and surrogate pairs, and a whole string
-- [ ] Soundness of the machine, and so of `parse`. What remains is an invariant relating a machine
-      state, meaning the frame stack plus the remaining text, to a partial derivation; the leaves
-      it will need are now all in place
-- [ ] `CanonicalNumbers` and `UniqueKeys` of parser output are property-tested, not proved. Both
-      follow from the machine invariant above, so they are the same piece of work
+- [x] Soundness of the machine, and so of `parse`. `Closes` says what the frames still on the
+      stack demand of the text after the value just read, and `value`, `continueWith` and
+      `member` are proved together by one induction on the bytes left. `text_parseFrom` lifts it
+      to a whole text, `textOf_parse` to `parse` where no byte order mark is set aside, and
+      `text_parse` states the case where one is
+- [ ] `CanonicalNumbers` and `UniqueKeys` of parser output are property-tested, not proved. The
+      first now follows from soundness and an induction over the grammar, `Spec.Num` recording a
+      normalised number; the second does not, the grammar admitting a repeated name, so it wants
+      its own argument about the set of names the machine has seen
 
 **Phase 5. Printer**
 - [x] `Number.toString`, `escape`, `renderString`, `compress`, `pretty`, `ToString` for both

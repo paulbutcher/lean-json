@@ -51,6 +51,13 @@ example := @Json.Parser.remaining_step
 example := @Json.Parser.ws_skipWs
 example := @Json.Parser.number_sound
 example := @Json.Parser.str_sound
+example := @Json.Parser.text_parseFrom
+example := @Json.Parser.text_parse
+example := @Json.Parser.textOf_parseBytes
+
+/-- The headline claim, reached through the entry point a caller actually calls. -/
+example {s : String} {j : Json} (h : Json.parse s { ignoreBOM := false } = .ok j) :
+    Json.Spec.TextOf s j := Json.Parser.textOf_parse rfl h
 
 example := @Json.Printer.textOf_compress
 example := @Json.Printer.textOf_pretty

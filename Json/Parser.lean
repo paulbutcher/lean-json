@@ -582,16 +582,10 @@ decreasing_by all_goals (have := step?_lt _hc; have := step?_lt _hb; omega)
 
 end
 
-end
-
 /-! ## Entry points -/
 
-/-- Parse JSON text. Text that is not a single complete value is an error, never a partial value. -/
-def parse (s : String) (cfg : Config := {}) : Except Error Json :=
-  let start :=
-    match step? s.startPos with
-    | some (c, q) => if cfg.ignoreBOM && c.toNat == 0xFEFF then q else s.startPos
-    | none => s.startPos
+/-- One complete value read from `start`, and nothing after it but whitespace. -/
+def parseFrom (cfg : Config) (start : s.Pos) : Except Error Json :=
   let w := skipWs start
   match value cfg w.pos 0 [] with
   | .error e => .error e
@@ -600,6 +594,16 @@ def parse (s : String) (cfg : Config := {}) : Except Error Json :=
     match step? w₂.pos with
     | none => .ok j
     | some (c, _) => .error ⟨byteOffset w₂.pos, .trailingText c⟩
+
+end
+
+/-- Parse JSON text. Text that is not a single complete value is an error, never a partial value. -/
+def parse (s : String) (cfg : Config := {}) : Except Error Json :=
+  let start :=
+    match step? s.startPos with
+    | some (c, q) => if cfg.ignoreBOM && c.toNat == 0xFEFF then q else s.startPos
+    | none => s.startPos
+  parseFrom cfg start
 
 /--
 Parse JSON text from bytes. RFC 8259 section 8.1 requires UTF-8, and that is enforced here by the
@@ -614,10 +618,14 @@ end
 
 end Parser
 
+@[expose] section
+
 @[inherit_doc Parser.parse]
 def parse (s : String) (cfg : Config := {}) : Except Error Json := Parser.parse s cfg
 
 @[inherit_doc Parser.parseBytes]
 def parseBytes (b : ByteArray) (cfg : Config := {}) : Except Error Json := Parser.parseBytes b cfg
+
+end
 
 end Json

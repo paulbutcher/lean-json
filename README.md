@@ -5,7 +5,8 @@ A JSON library for Lean 4, written to be safe on input it did not choose.
 Nothing in it is `partial`, nothing in it can panic, and the parser and the printer both keep
 their work on the heap rather than on the C stack, so a document that nests a million deep is an
 error or a long string rather than a crash. The grammar of RFC 8259 is transcribed in
-`Json.Spec`, and the printer is proved against it: whatever it emits, the grammar accepts.
+`Json.Spec`, and both directions are proved against it: whatever the printer emits, the grammar
+accepts; whatever the parser accepts, the grammar derives.
 
 The library depends on `Init` and `Std` and on nothing in the `Lean` namespace, so a program that
 reads and writes JSON does not carry the Lean frontend with it. `deriving ToJson, FromJson` and
@@ -118,6 +119,12 @@ points, so there is nothing to build.
 
 Proved:
 
+- Whatever the parser accepts, the grammar derives: `parse s cfg = .ok j` gives
+  `Spec.TextOf s j`, so no text is ever read as a value the RFC does not say it denotes. Leaves
+  and machine alike are covered, the machine by way of `Closes`, which says what the frames still
+  on the stack demand of the text that follows. A byte order mark the configuration says to
+  ignore is no part of a text of the grammar, so it is set aside first, and `text_parse` says so
+  rather than passing over it.
 - Whatever the printer emits, the grammar accepts: `CanonicalNumbers j → Spec.TextOf (compress j) j`,
   and the same for `pretty`. The work-stack traversal that runs is proved equal to a structural
   description of the same text, and the grammar theorems are proved about that.
@@ -136,18 +143,16 @@ Proved:
 
 Each of these ships as a theorem in the library rather than as a check beside the tests, so a
 proof of your own can cite it: `Json.get?_set?`, `Json.findLast?_dedupKeys`,
-`Json.Printer.textOf_compress` and the rest are importable with the code they describe.
+`Json.Parser.textOf_parse`, `Json.Printer.textOf_compress` and the rest are importable with the
+code they describe.
 
 Not proved, and covered by tests instead:
 
-- **Parser soundness against the grammar**, in part. Every leaf is proved: whitespace, the three
-  literals, each part of a number, and a string with its escapes, surrogate pairs and code points,
-  all stated against the productions of `Json.Spec` by way of `remaining`, the characters left at a
-  position. What is left is the machine, which needs an invariant relating the frame stack and the
-  remaining text to a partial derivation. Until that lands the parser as a whole is held to 318
-  files of the JSONTestSuite conformance corpus, two 3,000 round fuzz sweeps, and a suite of
-  behavioural tests.
-- **Completeness, meaning no false rejects.** The corpus is the evidence, not a theorem.
+- **Completeness, meaning no false rejects.** Soundness says nothing about what the parser turns
+  away, so this is where 318 files of the JSONTestSuite conformance corpus, two 3,000 round fuzz
+  sweeps and the behavioural tests earn their keep.
+- **That what the parser returns holds canonical numbers and, by default, no repeated field
+  name.** Both are true of every value it builds, and both are tested; neither is yet a theorem.
 - **Round tripping through text**, `parse (render j) = .ok j`, which needs completeness, so it is
   property-tested and corpus-tested. `Float` is the one codec whose round trip is a property
   rather than a theorem, since it goes through the exact decimal expansion of a bit pattern.
