@@ -30,12 +30,21 @@ example := @Json.set?_get?
 example := @Json.depth_arr_lt
 example := @Json.depth_obj_lt
 
+example := @Json.json_roundTrip
+example := @Json.int_roundTrip
+example := @Json.nat_roundTrip
+example := @Json.option_some_roundTrip
+example := @Json.prod_roundTrip
+example := @Json.array_roundTrip
+example := @Json.list_roundTrip
+
 example := @Json.Number.eqv_iff_eq
 example := @Json.Number.Eqv.symm
 example := @Json.Number.Eqv.trans
 example := @Json.Number.canonical_normalize
 example := @Json.Number.canonical_ofFloat
 example := @Json.Number.cmp_eq_eq_iff_eq
+example := @Json.Number.toInt?_ofInt
 
 example := @Json.Printer.textOf_compress
 example := @Json.Printer.textOf_pretty

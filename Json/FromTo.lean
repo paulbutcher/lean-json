@@ -275,6 +275,83 @@ def optionOf? (decode : Json → Except String α) : Json → Except String (Opt
   | null => .ok none
   | j => some <$> decode j
 
+
+/-! ## Round trips
+
+What a decoder gives back is what the encoder was given. Each claim is stated for the pair of
+instances it is about, and the ones with a hypothesis are those where the trip is conditional:
+an integer whose canonical form needs more padding than the bound allows cannot be read back,
+`some a` survives only when `a` does not itself encode as `null`, and a container survives
+exactly when its elements do.
+-/
+
+theorem json_roundTrip (j : Json) : (fromJson? (toJson j) : Except String Json) = .ok j := rfl
+
+theorem number_roundTrip (n : Number) : (fromJson? (toJson n) : Except String Number) = .ok n :=
+  rfl
+
+theorem bool_roundTrip (b : Bool) : (fromJson? (toJson b) : Except String Bool) = .ok b := rfl
+
+theorem string_roundTrip (s : String) : (fromJson? (toJson s) : Except String String) = .ok s :=
+  rfl
+
+theorem unit_roundTrip : (fromJson? (toJson ()) : Except String Unit) = .ok () := rfl
+
+/--
+An integer survives the trip whenever writing it out again stays within the padding bound, which
+excludes only those whose canonical form is a short mantissa followed by more than a thousand
+zeros.
+-/
+theorem int_roundTrip {i : Int} (h : (Number.ofInt i).exponent ≤ 1000) :
+    (fromJson? (toJson i) : Except String Int) = .ok i := by
+  simp [toJson, fromJson?, getInt?, Number.toInt?_ofInt h]
+
+theorem nat_roundTrip {n : Nat} (h : (Number.ofNat n).exponent ≤ 1000) :
+    (fromJson? (toJson n) : Except String Nat) = .ok n := by
+  simp [toJson, fromJson?, getNat?, Number.toNat?_ofNat h]
+
+theorem option_none_roundTrip {α : Type} [ToJson α] [FromJson α] :
+    (fromJson? (toJson (none : Option α)) : Except String (Option α)) = .ok none := rfl
+
+/--
+`some a` survives only when `a` is not itself encoded as `null`, which is the price of encoding
+`none` as `null`. `Option (Option α)` is the case that pays it.
+-/
+theorem option_some_roundTrip {α : Type} [ToJson α] [FromJson α]
+    (h : ∀ a : α, (fromJson? (toJson a) : Except String α) = .ok a) (a : α)
+    (hne : toJson a ≠ Json.null) :
+    (fromJson? (toJson (some a)) : Except String (Option α)) = .ok (some a) := by
+  show optionFromJson? (toJson a) = _
+  unfold optionFromJson?
+  split
+  · next hnull => exact absurd hnull hne
+  · simp [h a]
+    rfl
+
+theorem prod_roundTrip {α β : Type} [ToJson α] [FromJson α] [ToJson β] [FromJson β]
+    (ha : ∀ a : α, (fromJson? (toJson a) : Except String α) = .ok a)
+    (hb : ∀ b : β, (fromJson? (toJson b) : Except String β) = .ok b) (p : α × β) :
+    (fromJson? (toJson p) : Except String (α × β)) = .ok p := by
+  obtain ⟨a, b⟩ := p
+  show prodFromJson? (arr #[toJson a, toJson b]) = _
+  simp [prodFromJson?, ha a, hb b, Except.map]
+  rfl
+
+theorem array_roundTrip {α : Type} [ToJson α] [FromJson α]
+    (h : ∀ a : α, (fromJson? (toJson a) : Except String α) = .ok a) (a : Array α) :
+    (fromJson? (toJson a) : Except String (Array α)) = .ok a := by
+  show arrayFromJson? (arrayToJson a) = _
+  simp only [arrayToJson, arrayFromJson?, Array.mapM_map, Function.comp_def, h]
+  show Array.mapM (fun x => pure x) a = pure a
+  simpa using Array.mapM_pure (m := Except String) (f := id) (xs := a)
+
+theorem list_roundTrip {α : Type} [ToJson α] [FromJson α]
+    (h : ∀ a : α, (fromJson? (toJson a) : Except String α) = .ok a) (l : List α) :
+    (fromJson? (toJson l) : Except String (List α)) = .ok l := by
+  show Array.toList <$> (fromJson? (toJson l.toArray) : Except String (Array α)) = _
+  rw [array_roundTrip h l.toArray]
+  rfl
+
 end
 
 end Json

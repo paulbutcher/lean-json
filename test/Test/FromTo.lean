@@ -10,90 +10,6 @@ open Plausible (NamedBinder)
 
 namespace Test.FromTo
 
-/-! ## Round trips that are theorems -/
-
-theorem json_roundTrip (j : Json) : (fromJson? (toJson j) : Except String Json) = .ok j := rfl
-
-theorem number_roundTrip (n : Number) : (fromJson? (toJson n) : Except String Number) = .ok n :=
-  rfl
-
-theorem bool_roundTrip (b : Bool) : (fromJson? (toJson b) : Except String Bool) = .ok b := rfl
-
-theorem string_roundTrip (s : String) : (fromJson? (toJson s) : Except String String) = .ok s :=
-  rfl
-
-theorem unit_roundTrip : (fromJson? (toJson ()) : Except String Unit) = .ok () := rfl
-
-/-- Normalisation only ever moves the exponent up, one trailing zero at a time. -/
-theorem le_exponent_normalizeAux (m e : Int) : e ≤ (Number.normalizeAux m e).exponent := by
-  fun_induction Number.normalizeAux m e with
-  | case1 m e h ih => omega
-  | case2 m e h => simp
-
-theorem toInt?_ofInt {i : Int} {maxPadding : Nat}
-    (h : (Number.ofInt i).exponent ≤ (maxPadding : Int)) :
-    (Number.ofInt i).toInt? maxPadding = some i := by
-  have hexp : 0 ≤ (Number.normalize i 0).exponent := by
-    unfold Number.normalize
-    split
-    · simp
-    · exact le_exponent_normalizeAux i 0
-  have hval : (Number.normalize i 0).mantissa * 10 ^ (Number.normalize i 0).exponent.toNat = i := by
-    have heqv := Number.eqv_normalize i 0
-    simp only [Number.Eqv, Number.scaleTo, show min (Number.normalize i 0).exponent 0 = 0 by
-      omega] at heqv
-    simpa using heqv
-  have h' : (Number.normalize i 0).exponent ≤ (maxPadding : Int) := h
-  by_cases hm : (Number.normalize i 0).mantissa = 0
-  · have hi : i = 0 := by simpa [hm] using hval.symm
-    simp [Number.ofInt, Number.toInt?, Number.normalize, hi]
-  · simp [Number.ofInt, Number.toInt?, hm, hexp, h', hval]
-
-theorem toNat?_ofNat {n : Nat} {maxPadding : Nat}
-    (h : (Number.ofNat n).exponent ≤ (maxPadding : Int)) :
-    (Number.ofNat n).toNat? maxPadding = some n := by
-  simp [Number.toNat?, Number.ofNat, toInt?_ofInt h]
-
-/--
-An integer survives the trip whenever writing it out again stays within the padding bound, which
-excludes only those whose canonical form is a short mantissa followed by more than a thousand
-zeros.
--/
-theorem int_roundTrip {i : Int} (h : (Number.ofInt i).exponent ≤ 1000) :
-    (fromJson? (toJson i) : Except String Int) = .ok i := by
-  simp [toJson, fromJson?, getInt?, toInt?_ofInt h]
-
-theorem nat_roundTrip {n : Nat} (h : (Number.ofNat n).exponent ≤ 1000) :
-    (fromJson? (toJson n) : Except String Nat) = .ok n := by
-  simp [toJson, fromJson?, getNat?, toNat?_ofNat h]
-
-/--
-`some a` survives only when `a` is not itself encoded as `null`, which is the price of encoding
-`none` as `null`. `Option (Option α)` is the case that pays it.
--/
-theorem option_none_roundTrip {α : Type} [ToJson α] [FromJson α] :
-    (fromJson? (toJson (none : Option α)) : Except String (Option α)) = .ok none := rfl
-
-theorem option_some_roundTrip {α : Type} [ToJson α] [FromJson α]
-    (h : ∀ a : α, (fromJson? (toJson a) : Except String α) = .ok a) (a : α)
-    (hne : toJson a ≠ Json.null) :
-    (fromJson? (toJson (some a)) : Except String (Option α)) = .ok (some a) := by
-  show optionFromJson? (toJson a) = _
-  unfold optionFromJson?
-  split
-  · next hnull => exact absurd hnull hne
-  · simp [h a]
-    rfl
-
-theorem prod_roundTrip {α β : Type} [ToJson α] [FromJson α] [ToJson β] [FromJson β]
-    (ha : ∀ a : α, (fromJson? (toJson a) : Except String α) = .ok a)
-    (hb : ∀ b : β, (fromJson? (toJson b) : Except String β) = .ok b) (p : α × β) :
-    (fromJson? (toJson p) : Except String (α × β)) = .ok p := by
-  obtain ⟨a, b⟩ := p
-  show prodFromJson? (arr #[toJson a, toJson b]) = _
-  simp [prodFromJson?, ha a, hb b, Except.map]
-  rfl
-
 /-! ## Behaviour -/
 
 private def sample : Json :=
@@ -230,18 +146,6 @@ def floats : Array TestCase := #[
 
 /-! ## Properties -/
 
-abbrev natsRoundTrip : Prop :=
-  NamedBinder "ns" <| ∀ ns : List Nat,
-    ((fromJson? (toJson ns) : Except String (List Nat)).toOption == some ns) = true
-
-abbrev stringsRoundTrip : Prop :=
-  NamedBinder "ss" <| ∀ ss : List String,
-    ((fromJson? (toJson ss) : Except String (List String)).toOption == some ss) = true
-
-abbrev pairsRoundTrip : Prop :=
-  NamedBinder "ps" <| ∀ ps : List (Nat × String),
-    ((fromJson? (toJson ps) : Except String (List (Nat × String))).toOption == some ps) = true
-
 -- Bit patterns drawn straight from a small natural are all subnormal, the exponent field being
 -- zero, so the generated values have to be spread across the range deliberately.
 private def floatsOf (n : Nat) : List Float :=
@@ -264,9 +168,6 @@ abbrev decodeNatIsInverse : Prop :=
 
 def all : Array TestCase :=
   values ++ decoding ++ helpers ++ floats ++ #[
-    property "lists of naturals round trip" natsRoundTrip,
-    property "lists of strings round trip" stringsRoundTrip,
-    property "lists of pairs round trip" pairsRoundTrip,
     property "any float that JSON can express round trips" anyFloatRoundTrips,
     property "decodeNat? inverts the decimal spelling" decodeNatIsInverse
   ]

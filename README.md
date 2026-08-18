@@ -31,7 +31,7 @@ Measured against `Lean.Data.Json` on Lean v4.33.0. Each row is a regression test
 ## Using it
 
 ```lean
-require json from git "<repository url>" @ "main"
+require json from git "https://github.com/paulbutcher/lean-json.git" @ "main"
 ```
 
 ```lean
@@ -70,7 +70,7 @@ helpers; reading enforces UTF-8 where the bytes arrive, as RFC 8259 section 8.1 
 ## Deriving, and literal syntax
 
 ```lean
-require jsonDeriving from git "<repository url>" @ "main" / "deriving"
+require jsonDeriving from git "https://github.com/paulbutcher/lean-json.git" @ "main" / "deriving"
 ```
 
 ```lean
@@ -130,6 +130,9 @@ Proved:
   and putting back what is already at a path leaves the value alone.
 - Deduplicating an object's field names leaves every lookup unchanged, repeats no name, and
   leaves an object that repeats none alone.
+- Encoding then decoding gives back the value: for `Json`, `Number`, `Bool`, `String` and `Unit`
+  outright, for `Int` and `Nat` within the padding bound, and for `Option`, `Prod`, `Array` and
+  `List` from the round trip of whatever they hold.
 
 Each of these ships as a theorem in the library rather than as a check beside the tests, so a
 proof of your own can cite it: `Json.get?_set?`, `Json.findLast?_dedupKeys`,
@@ -142,7 +145,9 @@ Not proved, and covered by tests instead:
   parser is held to 318 files of the JSONTestSuite conformance corpus, two 3,000 round fuzz
   sweeps, and a suite of behavioural tests.
 - **Completeness, meaning no false rejects.** The corpus is the evidence, not a theorem.
-- **Round tripping**, which needs completeness, so it is property-tested and corpus-tested.
+- **Round tripping through text**, `parse (render j) = .ok j`, which needs completeness, so it is
+  property-tested and corpus-tested. `Float` is the one codec whose round trip is a property
+  rather than a theorem, since it goes through the exact decimal expansion of a bit pattern.
 - **Absence of stack overflow and out-of-memory.** Both are achieved by construction and
   evidenced by fuzzing rather than proved. Freeing a deeply nested value is a recursion the
   library does not control, and it was measured rather than argued: a million-deep value built

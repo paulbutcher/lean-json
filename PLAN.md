@@ -362,6 +362,9 @@ s.toByteArray.IsValidUTF8
 -- round trip, for both compress and pretty. Waits on completeness, so property-tested
 CanonicalNumbers j → parse cfg (render j) = .ok j
 
+-- codecs, each from the round trip of what it contains
+fromJson? (toJson x) = .ok x
+
 -- objects and paths, proved
 findLast? (dedupKeys a) k = findLast? a k
 distinctNames (dedupKeys a)
@@ -512,6 +515,13 @@ names every theorem the README tells a caller about, so making one private, rena
 it back beside the tests fails the build. Marking `get?_set?` private is the mutation that
 demonstrates it, and nothing else in the suite notices that change.
 
+Phase 6's last open box needed no work at all in the end. It was recorded as waiting on a
+characterisation of `Array.mapM`, and core carries `mapM_map` and `mapM_pure` as simp lemmas, so
+decoding an encoding collapses to `mapM pure` and the two proofs are four lines each. A deferral
+is worth re-reading before it is acted on: what blocked it may have been fixed upstream, or may
+never have been a blocker. The mutations are aimed at the codec rather than the claim: a decoder
+that drops the last element, and an encoder that reverses the array, each fail the proof.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
@@ -634,10 +644,11 @@ No open questions. Work deliberately postponed:
       `Nat` under the padding bound of D25. `Option` and `Prod` are proved from the round trips
       of what they contain, `Option` needing the value not to encode as `null`, which is what
       `Option (Option α)` violates
-- [x] 54 tests: encodings, decoding failures, the helpers, the float edge cases that core loses,
-      and five properties, each confirmed by a mutation that ought to fail it
-- [ ] `Array` and `List` round trips are property-tested, not proved: the instances go through
-      `Array.mapM`, and there is no characterisation of it to induct on yet
+- [x] 51 tests: encodings, decoding failures, the helpers, the float edge cases that core loses,
+      and two properties, each confirmed by a mutation that ought to fail it
+- [x] `Array` and `List` round trips proved from the element's. The characterisation of
+      `Array.mapM` this waited on turned out to be unnecessary: core `mapM_map` and `mapM_pure`
+      reduce decoding an encoding to `mapM pure`, so each proof is four lines
 
 **Phase 7. Ergonomics**
 - [x] `Step` and `Path`, with `get?`, `getD`, `has`, `getAs?`, `set?`, `setAs?`, `modify?` and

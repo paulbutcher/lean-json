@@ -380,6 +380,40 @@ theorem canonical_ofFloat {x : Float} {n : Number} (h : ofFloat? x = some n) : C
     | (injection h with h; exact h ▸ canonical_normalize _ _)
     | simp at h
 
+
+/-- Normalisation only ever moves the exponent up, one trailing zero at a time. -/
+theorem le_exponent_normalizeAux (m e : Int) : e ≤ (normalizeAux m e).exponent := by
+  fun_induction normalizeAux m e with
+  | case1 m e h ih => omega
+  | case2 m e h => simp
+
+/--
+An integer read back out of the number it was written to is the integer, whenever writing it out
+again stays within the padding bound.
+-/
+theorem toInt?_ofInt {i : Int} {maxPadding : Nat}
+    (h : (ofInt i).exponent ≤ (maxPadding : Int)) :
+    (ofInt i).toInt? maxPadding = some i := by
+  have hexp : 0 ≤ (normalize i 0).exponent := by
+    unfold normalize
+    split
+    · simp
+    · exact le_exponent_normalizeAux i 0
+  have hval : (normalize i 0).mantissa * 10 ^ (normalize i 0).exponent.toNat = i := by
+    have heqv := eqv_normalize i 0
+    simp only [Eqv, scaleTo, show min (normalize i 0).exponent 0 = 0 by omega] at heqv
+    simpa using heqv
+  have h' : (normalize i 0).exponent ≤ (maxPadding : Int) := h
+  by_cases hm : (normalize i 0).mantissa = 0
+  · have hi : i = 0 := by simpa [hm] using hval.symm
+    simp [ofInt, toInt?, normalize, hi]
+  · simp [ofInt, toInt?, hm, hexp, h', hval]
+
+theorem toNat?_ofNat {n : Nat} {maxPadding : Nat}
+    (h : (ofNat n).exponent ≤ (maxPadding : Int)) :
+    (ofNat n).toNat? maxPadding = some n := by
+  simp [toNat?, ofNat, toInt?_ofInt h]
+
 end Number
 
 end
