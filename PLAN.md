@@ -227,14 +227,17 @@ mantissas, so the alignment factor is bounded by mantissa length and never by th
 ## 5. Module layout
 
 ```
-Json/Basic.lean          Json, constructors, instances, UniqueKeys
+Json/Array.lean          general array facts the field lemmas need, absent from core
+Json/Basic.lean          Json, constructors, instances, UniqueKeys, field and depth lemmas
 Json/Number.lean         Number, Canonical, Eqv, Ord, bounded conversions
 Json/Spec.lean           RFC 8259 grammar as an inductive Prop
 Json/Parser.lean         iterative parser, Config, structured Error
 Json/Parser/Lemmas.lean  soundness, completeness, UniqueKeys
 Json/Printer.lean        compress, pretty, escaping, number rendering
+Json/Printer/Soundness.lean
+                         output is JSON text, output is valid UTF-8
 Json/FromTo.lean         ToJson / FromJson classes, instances, helpers
-Json/Query.lean          total accessors, path lookup, merge, update
+Json/Query.lean          total accessors, path lookup, merge, update, the path laws
 Json/Stream.lean         IO.FS.Stream helpers
 test/                    own lakefile, requires root by path, plus plausible
 test/corpus/             JSONTestSuite, vendored under its own licence
@@ -243,6 +246,12 @@ deriving/test/           own lakefile, requires the companion by path
 ```
 
 The companion holds only the deriving handlers and `json%`.
+
+A theorem ships with the code it is about when a client could want to build a proof on top of it,
+and lives in `test/` only when it is neither that nor needed for the library to compile. That is
+why the field and path lemmas, the depth bounds and the printer's grammar theorems are here
+rather than beside the tests that used to hold them, and why `Json/Spec.lean` exposes its
+definitions: reasoning against the grammar means unfolding them.
 
 ## 6. Parser
 
@@ -414,11 +423,12 @@ aspirational.
 Tests live in `test/` with their own lakefile requiring the root by path, driven by a
 `@[test_driver]` script in the root lakefile, so nothing test-only enters a consumer's
 dependency graph. Strongest available form of each claim: theorem, then Plausible property,
-then example. Theorems not needed by production code live in `test/`; compiling is passing.
+then example. A theorem lives in `test/` only when it is neither needed for the library to
+compile nor something a client would want to prove something on top of; compiling is passing.
 
 Layers: the theorem set from section 8; properties for round tripping, parser and printer
-agreement, and accessor laws; an accept/reject conformance corpus; fuzzing for the crash-freedom
-claim that proofs cannot reach; and the regression cases from section 2.
+agreement, and the removal law; an accept/reject conformance corpus; fuzzing for the
+crash-freedom claim that proofs cannot reach; and the regression cases from section 2.
 
 Two practical notes from Phase 1. `decide` cannot evaluate anything defined by well-founded
 recursion, since such definitions do not reduce in the kernel, but `simp` with the generated
@@ -497,6 +507,11 @@ of a name rather than the last, and `setObjVal?` appending where it should overw
 proof: the first two in the fold lemmas themselves, the third in the two path laws, which is the
 right place, since what those laws are about is an update landing where lookup will find it.
 
+Where a theorem lives is itself a claim, and `test/Test/Api.lean` is what holds it to account: it
+names every theorem the README tells a caller about, so making one private, renaming it, or moving
+it back beside the tests fails the build. Marking `get?_set?` private is the mutation that
+demonstrates it, and nothing else in the suite notices that change.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
@@ -551,8 +566,8 @@ No open questions. Work deliberately postponed:
       place, `mergeObj` via `dedupKeys`
 - [x] `dedupKeys` correctness proved: every lookup survives it, the result repeats no name,
       and an object that repeats none is left alone, from which idempotence follows. The
-      lemmas the proofs rest on are in `test/Test/Fold.lean`, which describes a field array
-      one `push` at a time
+      lemmas the proofs rest on ship with it, describing a field array one `push` at a time,
+      with the general array facts they need in `Json/Array.lean`
 - [ ] Stack-safe traversal primitive. See the note on constraint 4 below; the termination lemma it
       needs, `(l.map sizeOf).sum < sizeOf l`, is proved out and ready to use
 
@@ -562,8 +577,8 @@ No open questions. Work deliberately postponed:
       `Object`, `Members`, `Member`, and `Text`
 - [x] Eleven derivations built by hand as validation, covering whitespace, both number forms,
       escapes, a surrogate pair, empty and populated arrays and objects, and nesting
-- [x] Two rejection proofs, that `"\ud800"` and `01` denote nothing, with the three inversion
-      lemmas they need
+- [x] Two rejection proofs, that `"\ud800"` and `01` denote nothing. The inversion lemmas they
+      need ship with the grammar, since reasoning against it is what a client does too
 - [ ] Unambiguity theorem. See the note below on why the relation is deliberately not
       deterministic in its remainder
 

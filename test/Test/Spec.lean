@@ -102,38 +102,12 @@ example : Text ['{', '"', 'a', '"', ':', '[', '{', '}', ']', '}']
       (.mk .nil .nil)),
     .nil⟩
 
-/-!
-Rejection is the other half of validating a transcription, and it needs inversion rather than
-construction. `cases` discharges most alternatives on its own, from the shape of the character
-list; what it cannot see is that whitespace never swallows a non-whitespace character. These
-three lemmas supply that, and are the start of the toolkit the completeness proofs will want.
+/-! ## Rejection
+
+The other half of validating a transcription. What these need beyond `cases` is the inversion
+lemmas in `Json.Spec`, which say that whitespace never swallows a non-whitespace character and
+that no character carries a surrogate code point.
 -/
-
-theorem ws_eq_of_not_isWs {c : Char} {s r : List Char} (hc : isWs c = false) :
-    Ws (c :: s) r → r = c :: s := by
-  intro h
-  cases h with
-  | nil => rfl
-  | cons hws _ => rw [hc] at hws; exact absurd hws (by decide)
-
-theorem not_token_of_ne {t c : Char} {s r : List Char} (hc : isWs c = false) (hne : c ≠ t) :
-    ¬ Token t (c :: s) r := by
-  rintro ⟨hws, -⟩
-  have := ws_eq_of_not_isWs hc hws
-  simp at this
-  exact hne this.1.symm
-
-/-- No character carries a surrogate code point. This is what makes D8 hold of the alphabet. -/
-theorem char_not_surrogate (c : Char) : c.toNat < 0xD800 ∨ 0xDFFF < c.toNat := by
-  have h := c.valid
-  simp only [UInt32.isValidChar, Nat.isValidChar] at h
-  simp only [Char.toNat]
-  omega
-
-theorem escape_not_surrogate {v : Nat} {c : Char} (hval : c.toNat = v) :
-    v < 0xD800 ∨ 0xDFFF < v := by
-  have := char_not_surrogate c
-  omega
 
 /-- `"\ud800"`, a lone surrogate escape, denotes nothing at all. -/
 example : ¬ ∃ j, Text ['"', '\\', 'u', 'd', '8', '0', '0', '"'] j := by

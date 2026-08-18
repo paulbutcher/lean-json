@@ -24,6 +24,8 @@ module at the level the RFC itself is written in.
 
 namespace Json.Spec
 
+@[expose] section
+
 /-! ## Whitespace and structural characters -/
 
 /-- `ws = *( %x20 / %x09 / %x0A / %x0D )` -/
@@ -197,5 +199,42 @@ def Text (s : List Char) (j : Json) : Prop :=
 
 /-- `Text` for a `String`, which is the form the parser's entry point takes. -/
 def TextOf (s : String) (j : Json) : Prop := Text s.toList j
+
+/-! ## Inversion
+
+Construction says what the grammar accepts; rejection needs the other direction. `cases`
+discharges most alternatives on its own, from the shape of the character list. What it cannot see
+is that whitespace never swallows a non-whitespace character, and that no character carries a
+surrogate code point, which is where D8 becomes a property of the alphabet rather than a rule
+imposed on the grammar.
+-/
+
+theorem ws_eq_of_not_isWs {c : Char} {s r : List Char} (hc : isWs c = false) :
+    Ws (c :: s) r → r = c :: s := by
+  intro h
+  cases h with
+  | nil => rfl
+  | cons hws _ => rw [hc] at hws; exact absurd hws (by decide)
+
+theorem not_token_of_ne {t c : Char} {s r : List Char} (hc : isWs c = false) (hne : c ≠ t) :
+    ¬ Token t (c :: s) r := by
+  rintro ⟨hws, -⟩
+  have := ws_eq_of_not_isWs hc hws
+  simp at this
+  exact hne this.1.symm
+
+/-- No character carries a surrogate code point. -/
+theorem char_not_surrogate (c : Char) : c.toNat < 0xD800 ∨ 0xDFFF < c.toNat := by
+  have h := c.valid
+  simp only [UInt32.isValidChar, Nat.isValidChar] at h
+  simp only [Char.toNat]
+  omega
+
+theorem escape_not_surrogate {v : Nat} {c : Char} (hval : c.toNat = v) :
+    v < 0xD800 ∨ 0xDFFF < v := by
+  have := char_not_surrogate c
+  omega
+
+end
 
 end Json.Spec

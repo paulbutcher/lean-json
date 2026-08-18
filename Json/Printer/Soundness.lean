@@ -2,7 +2,14 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Json
+module
+
+public import Json.Printer
+public import Json.Spec
+
+public section
+
+namespace Json.Printer
 
 /-!
 What the printer emits, stated against the grammar rather than against the printer.
@@ -10,18 +17,16 @@ What the printer emits, stated against the grammar rather than against the print
 The printer runs over an explicit stack, which is what keeps it safe on deep values but leaves
 its output related to the value only through a loop invariant. So the text is described a second
 time by structural recursion, `chars`, and the two are proved to agree; the grammar theorems are
-then stated about `chars`, where induction follows the shape of the value.
+then stated about `chars`, where induction follows the shape of the value. Only the claims a
+caller can use are exported; the description and the per-production lemmas are the scaffolding
+that reaches them.
 -/
-
-open Json Json.Printer
-
-namespace Test.Printer.Soundness
 
 /-! ## The same output, described by recursion on the value -/
 
 mutual
 
-def chars (st : Style) (depth : Nat) : Json → List Char
+private def chars (st : Style) (depth : Nat) : Json → List Char
   | .null => "null".toList
   | .bool true => "true".toList
   | .bool false => "false".toList
@@ -36,12 +41,12 @@ def chars (st : Style) (depth : Nat) : Json → List Char
     else ("{" ++ st.lineBreak (depth + 1)).toList ++
       memberChars st (depth + 1) fields.toList true ++ (st.lineBreak depth ++ "}").toList
 
-def elemChars (st : Style) (depth : Nat) : List Json → Bool → List Char
+private def elemChars (st : Style) (depth : Nat) : List Json → Bool → List Char
   | [], _ => []
   | j :: l, first =>
     (st.precedes depth first).toList ++ chars st depth j ++ elemChars st depth l false
 
-def memberChars (st : Style) (depth : Nat) : List (String × Json) → Bool → List Char
+private def memberChars (st : Style) (depth : Nat) : List (String × Json) → Bool → List Char
   | [], _ => []
   | (k, v) :: l, first =>
     (st.precedes depth first).toList ++ (string k).toList ++ st.colon.toList ++
@@ -49,51 +54,51 @@ def memberChars (st : Style) (depth : Nat) : List (String × Json) → Bool → 
 
 end
 
-def itemChars (st : Style) : Item → List Char
+private def itemChars (st : Style) : Item → List Char
   | .lit s => s.toList
   | .val d j => chars st d j
   | .elems d l first => elemChars st d l first
   | .members d l first => memberChars st d l first
 
-def itemsChars (st : Style) : List Item → List Char
+private def itemsChars (st : Style) : List Item → List Char
   | [] => []
   | i :: rest => itemChars st i ++ itemsChars st rest
 
 /-! ## Agreement -/
 
 /-- The characters a string contributes inside a literal. -/
-def escapeCharsOf (l : List Char) : List Char := (l.map escapeChars).flatten
+private def escapeCharsOf (l : List Char) : List Char := (l.map escapeChars).flatten
 
-theorem toList_escapeCharTo (acc : String) (c : Char) :
+private theorem toList_escapeCharTo (acc : String) (c : Char) :
     (escapeCharTo acc c).toList = acc.toList ++ escapeChars c := by
   fun_cases escapeCharTo acc c <;> simp [escapeChars] <;> omega
 
-theorem toList_foldl_escape (l : List Char) (acc : String) :
+private theorem toList_foldl_escape (l : List Char) (acc : String) :
     (l.foldl escapeCharTo acc).toList = acc.toList ++ escapeCharsOf l := by
   induction l generalizing acc with
   | nil => simp [escapeCharsOf]
   | cons c cs ih => simp [ih, toList_escapeCharTo, escapeCharsOf]
 
-theorem toList_escapeTo (acc s : String) :
+private theorem toList_escapeTo (acc s : String) :
     (escapeTo acc s).toList = acc.toList ++ escapeCharsOf s.toList := by
   simp [escapeTo, String.foldl_eq_foldl_toList, toList_foldl_escape]
 
-theorem toList_string (s : String) :
+private theorem toList_string (s : String) :
     (string s).toList = '"' :: (escapeCharsOf s.toList ++ ['"']) := by
   simp [string, stringTo, String.toList_push, toList_escapeTo]
 
-theorem toList_stringTo (acc s : String) :
+private theorem toList_stringTo (acc s : String) :
     (stringTo acc s).toList = acc.toList ++ (string s).toList := by
   simp [stringTo, String.toList_push, toList_escapeTo, toList_string]
 
 /-! ## Digits -/
 
 /-- The value a run of digit characters denotes. -/
-def digitsValue : List Char → Nat
+private def digitsValue : List Char → Nat
   | [] => 0
   | c :: cs => Spec.digitVal c * 10 ^ cs.length + digitsValue cs
 
-theorem digitsValue_append (l₁ l₂ : List Char) :
+private theorem digitsValue_append (l₁ l₂ : List Char) :
     digitsValue (l₁ ++ l₂) = digitsValue l₁ * 10 ^ l₂.length + digitsValue l₂ := by
   induction l₁ with
   | nil => simp [digitsValue]
@@ -101,17 +106,18 @@ theorem digitsValue_append (l₁ l₂ : List Char) :
     simp only [List.cons_append, digitsValue, ih, List.length_append, Nat.pow_add,
       Nat.add_mul, Nat.mul_assoc, Nat.add_assoc]
 
-theorem hexVal_hexDigitChar {d : Nat} (h : d < 16) : Spec.hexVal? (hexDigitChar d) = some d :=
+private theorem hexVal_hexDigitChar {d : Nat} (h : d < 16) :
+    Spec.hexVal? (hexDigitChar d) = some d :=
   (by decide : ∀ d ∈ List.range 16, Spec.hexVal? (hexDigitChar d) = some d) d
     (List.mem_range.mpr h)
 
-theorem isDigit_digitChar {d : Nat} (h : d < 10) : Spec.isDigit (digitChar d) = true :=
+private theorem isDigit_digitChar {d : Nat} (h : d < 10) : Spec.isDigit (digitChar d) = true :=
   (by decide : ∀ d ∈ List.range 10, Spec.isDigit (digitChar d) = true) d (List.mem_range.mpr h)
 
-theorem digitVal_digitChar {d : Nat} (h : d < 10) : Spec.digitVal (digitChar d) = d :=
+private theorem digitVal_digitChar {d : Nat} (h : d < 10) : Spec.digitVal (digitChar d) = d :=
   (by decide : ∀ d ∈ List.range 10, Spec.digitVal (digitChar d) = d) d (List.mem_range.mpr h)
 
-theorem digitCharsTo_eq (n : Nat) : ∀ acc, digitCharsTo n acc = digitChars n ++ acc := by
+private theorem digitCharsTo_eq (n : Nat) : ∀ acc, digitCharsTo n acc = digitChars n ++ acc := by
   induction n using Nat.strongRecOn with
   | _ n ih =>
     intro acc
@@ -123,19 +129,20 @@ theorem digitCharsTo_eq (n : Nat) : ∀ acc, digitCharsTo n acc = digitChars n +
       rw [digitCharsTo, if_neg h, hr, ih (n / 10) (by omega), ih (n / 10) (by omega)]
       simp
 
-theorem digitChars_of_lt {n : Nat} (h : n < 10) : digitChars n = [digitChar n] := by
+private theorem digitChars_of_lt {n : Nat} (h : n < 10) : digitChars n = [digitChar n] := by
   rw [digitChars, digitCharsTo, if_pos h]
 
-theorem digitChars_of_le {n : Nat} (h : 10 ≤ n) :
+private theorem digitChars_of_le {n : Nat} (h : 10 ≤ n) :
     digitChars n = digitChars (n / 10) ++ [digitChar (n % 10)] := by
   rw [digitChars, digitCharsTo, if_neg (by omega), digitCharsTo_eq]
 
-theorem digitChars_ne_nil (n : Nat) : digitChars n ≠ [] := by
+private theorem digitChars_ne_nil (n : Nat) : digitChars n ≠ [] := by
   by_cases h : n < 10
   · simp [digitChars_of_lt h]
   · simp [digitChars_of_le (show 10 ≤ n by omega)]
 
-theorem isDigit_of_mem_digitChars (n : Nat) : ∀ c ∈ digitChars n, Spec.isDigit c = true := by
+private theorem isDigit_of_mem_digitChars (n : Nat) :
+    ∀ c ∈ digitChars n, Spec.isDigit c = true := by
   induction n using Nat.strongRecOn with
   | _ n ih =>
     by_cases h : n < 10
@@ -148,7 +155,7 @@ theorem isDigit_of_mem_digitChars (n : Nat) : ∀ c ∈ digitChars n, Spec.isDig
       · exact ih (n / 10) (by omega) c hc
       · exact hc ▸ isDigit_digitChar (by omega)
 
-theorem digitsValue_digitChars (n : Nat) : digitsValue (digitChars n) = n := by
+private theorem digitsValue_digitChars (n : Nat) : digitsValue (digitChars n) = n := by
   induction n using Nat.strongRecOn with
   | _ n ih =>
     by_cases h : n < 10
@@ -158,7 +165,7 @@ theorem digitsValue_digitChars (n : Nat) : digitsValue (digitChars n) = n := by
       simp [digitsValue, digitVal_digitChar (show n % 10 < 10 by omega)]
       omega
 
-theorem head_digitChars {n : Nat} (h : 1 ≤ n) :
+private theorem head_digitChars {n : Nat} (h : 1 ≤ n) :
     ∃ c cs, digitChars n = c :: cs ∧ ('1' ≤ c && c ≤ '9') = true := by
   induction n using Nat.strongRecOn with
   | _ n ih =>
@@ -170,7 +177,7 @@ theorem head_digitChars {n : Nat} (h : 1 ≤ n) :
       exact ⟨c, cs ++ [digitChar (n % 10)], by
         rw [digitChars_of_le (by omega : 10 ≤ n), hc, List.cons_append], hrange⟩
 
-theorem spec_digits {l : List Char} (hd : ∀ c ∈ l, Spec.isDigit c = true) (hne : l ≠ [])
+private theorem spec_digits {l : List Char} (hd : ∀ c ∈ l, Spec.isDigit c = true) (hne : l ≠ [])
     (r : List Char) : Spec.Digits (l ++ r) (digitsValue l) l.length r := by
   induction l with
   | nil => exact absurd rfl hne
@@ -181,10 +188,10 @@ theorem spec_digits {l : List Char} (hd : ∀ c ∈ l, Spec.isDigit c = true) (h
       exact Spec.Digits.cons (hd c (by simp))
         (ih (fun x hx => hd x (by simp [hx])) (by simp))
 
-theorem append_ne_nil_of_right {l₁ l₂ : List Char} (h : l₂ ≠ []) : l₁ ++ l₂ ≠ [] := by
+private theorem append_ne_nil_of_right {l₁ l₂ : List Char} (h : l₂ ≠ []) : l₁ ++ l₂ ≠ [] := by
   cases l₁ <;> simp_all
 
-theorem spec_digits_append {l₁ l₂ r : List Char}
+private theorem spec_digits_append {l₁ l₂ r : List Char}
     (h₁ : ∀ c ∈ l₁, Spec.isDigit c = true) (h₂ : ∀ c ∈ l₂, Spec.isDigit c = true)
     (hne : l₁ ++ l₂ ≠ []) :
     Spec.Digits (l₁ ++ (l₂ ++ r)) (digitsValue l₁ * 10 ^ l₂.length + digitsValue l₂)
@@ -197,32 +204,32 @@ theorem spec_digits_append {l₁ l₂ r : List Char}
   rw [List.append_assoc] at h
   simpa [digitsValue_append] using h
 
-theorem spec_int' {l : List Char} (hd : ∀ c ∈ l, Spec.isDigit c = true)
+private theorem spec_int' {l : List Char} (hd : ∀ c ∈ l, Spec.isDigit c = true)
     (hhead : ∃ c cs, l = c :: cs ∧ ('1' ≤ c && c ≤ '9') = true) (r : List Char) :
     Spec.Int' (l ++ r) (digitsValue l) r := by
   obtain ⟨c, cs, hl, hrange⟩ := hhead
   subst hl
   exact Spec.Int'.digits hrange (spec_digits hd (by simp) r)
 
-theorem isDigit_of_mem_zeros (k : Nat) :
+private theorem isDigit_of_mem_zeros (k : Nat) :
     ∀ c ∈ List.replicate k '0', Spec.isDigit c = true := by
   intro c hc
   rw [List.eq_of_mem_replicate hc]
   decide
 
-theorem digitsValue_zeros (k : Nat) : digitsValue (List.replicate k '0') = 0 := by
+private theorem digitsValue_zeros (k : Nat) : digitsValue (List.replicate k '0') = 0 := by
   induction k with
   | zero => simp [digitsValue]
   | succ k ih => simp [List.replicate_succ, digitsValue, ih, Spec.digitVal]
 
 /-! ## Numbers -/
 
-theorem toList_sign (m : Int) :
+private theorem toList_sign (m : Int) :
     ((if m < 0 then "-" else "" : String)).toList = (if m < 0 then ['-'] else []) := by
   by_cases h : m < 0 <;> simp [h]
 
 /-- Rescaling the mantissa by a power of ten leaves the normal form alone. -/
-theorem normalize_mul_pow (m : Int) (k : Nat) :
+private theorem normalize_mul_pow (m : Int) (k : Nat) :
     Number.normalize (m * 10 ^ k) 0 = Number.normalize m k :=
   Number.eqv_iff_normalize_eq.mp <| by
     show Number.Eqv ⟨m * 10 ^ k, 0⟩ ⟨m, (k : Int)⟩
@@ -231,7 +238,7 @@ theorem normalize_mul_pow (m : Int) (k : Nat) :
     simp only [Number.Eqv, Number.scaleTo, h, h0, Int.pow_zero, Int.mul_one]
 
 /-- Each branch of `number` is a sign followed by the same four productions. -/
-theorem spec_num_of {m : Int} {text r s₂ s₃ : List Char} {i f nf : Nat} {e : Int}
+private theorem spec_num_of {m : Int} {text r s₂ s₃ : List Char} {i f nf : Nat} {e : Int}
     {target : Number}
     (hi : Spec.Int' text i s₂) (hf : Spec.Frac s₂ f nf s₃) (he : Spec.Exp s₃ e r)
     (hv : Number.normalize
@@ -243,7 +250,7 @@ theorem spec_num_of {m : Int} {text r s₂ s₃ : List Char} {i f nf : Nat} {e :
   · simpa [h] using Spec.Num.mk (neg := true) Spec.Sign.minus hi hf he
   · simpa [h] using Spec.Num.mk (neg := false) Spec.Sign.absent hi hf he
 
-theorem spec_num (n : Number) (r : List Char) :
+private theorem spec_num (n : Number) (r : List Char) :
     Spec.Num ((number n).toList ++ r) (Number.normalize n.mantissa n.exponent) r := by
   by_cases hm : n.mantissa = 0
   · simp only [number, if_pos hm]
@@ -379,7 +386,7 @@ theorem spec_num (n : Number) (r : List Char) :
 
 /-! ## Strings -/
 
-theorem spec_ch (c : Char) (r : List Char) : Spec.Ch (escapeChars c ++ r) c r := by
+private theorem spec_ch (c : Char) (r : List Char) : Spec.Ch (escapeChars c ++ r) c r := by
   fun_cases escapeChars c
   case case1 => exact .quote
   case case2 => exact .backslash
@@ -401,14 +408,14 @@ theorem spec_ch (c : Char) (r : List Char) : Spec.Ch (escapeChars c ++ r) c r :=
     simp only [Spec.isUnescaped, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
     omega
 
-theorem spec_chars (l r : List Char) : Spec.Chars (escapeCharsOf l ++ r) l r := by
+private theorem spec_chars (l r : List Char) : Spec.Chars (escapeCharsOf l ++ r) l r := by
   induction l with
   | nil => simpa [escapeCharsOf] using Spec.Chars.nil (r := r)
   | cons c cs ih =>
     have h := Spec.Chars.cons (spec_ch c (escapeCharsOf cs ++ r)) ih
     simpa [escapeCharsOf, List.append_assoc] using h
 
-theorem spec_str (s : String) (r : List Char) : Spec.Str ((string s).toList ++ r) s r := by
+private theorem spec_str (s : String) (r : List Char) : Spec.Str ((string s).toList ++ r) s r := by
   rw [toList_string]
   have h := Spec.Str.mk (spec_chars s.toList ('"' :: r))
   rw [String.ofList_toList] at h
@@ -416,13 +423,13 @@ theorem spec_str (s : String) (r : List Char) : Spec.Str ((string s).toList ++ r
 
 /-! ## Whitespace and structural characters -/
 
-theorem ws_spaces (n : Nat) (x : List Char) : Spec.Ws ((spaces n).toList ++ x) x := by
+private theorem ws_spaces (n : Nat) (x : List Char) : Spec.Ws ((spaces n).toList ++ x) x := by
   simp only [spaces, String.toList_ofList]
   induction n with
   | zero => simpa using Spec.Ws.nil (r := x)
   | succ n ih => exact List.replicate_succ ▸ Spec.Ws.cons (by decide) ih
 
-theorem ws_lineBreak (st : Style) (d : Nat) (x : List Char) :
+private theorem ws_lineBreak (st : Style) (d : Nat) (x : List Char) :
     Spec.Ws ((st.lineBreak d).toList ++ x) x := by
   unfold Style.lineBreak
   split
@@ -430,16 +437,16 @@ theorem ws_lineBreak (st : Style) (d : Nat) (x : List Char) :
   · simpa [String.toList_append] using Spec.Ws.cons (c := '\n') (by decide) (ws_spaces _ x)
 
 /-- An opening or separating character, which our layout never precedes with space. -/
-theorem token_before (t : Char) (st : Style) (d : Nat) (x : List Char) :
+private theorem token_before (t : Char) (st : Style) (d : Nat) (x : List Char) :
     Spec.Token t (t :: ((st.lineBreak d).toList ++ x)) x :=
   Spec.Token.mk Spec.Ws.nil (ws_lineBreak st d x)
 
 /-- A closing character, which the layout may precede with a break. -/
-theorem token_after (t : Char) (st : Style) (d : Nat) (x : List Char) :
+private theorem token_after (t : Char) (st : Style) (d : Nat) (x : List Char) :
     Spec.Token t ((st.lineBreak d).toList ++ (t :: x)) x :=
   Spec.Token.mk (ws_lineBreak st d (t :: x)) Spec.Ws.nil
 
-theorem token_colon (st : Style) (x : List Char) :
+private theorem token_colon (st : Style) (x : List Char) :
     Spec.NameSeparator (st.colon.toList ++ x) x := by
   unfold Style.colon
   split
@@ -447,23 +454,23 @@ theorem token_colon (st : Style) (x : List Char) :
   · exact Spec.Token.mk (s' := ' ' :: x) (by simpa using Spec.Ws.nil (r := ':' :: ' ' :: x))
       (Spec.Ws.cons (by decide) Spec.Ws.nil)
 
-theorem token_separator (st : Style) (d : Nat) (x : List Char) :
+private theorem token_separator (st : Style) (d : Nat) (x : List Char) :
     Spec.ValueSeparator ((st.precedes d false).toList ++ x) x := by
   simpa [Style.precedes, String.toList_append] using token_before ',' st d x
 
-theorem toList_render (st : Style) (items : List Item) (acc : String) :
+private theorem toList_render (st : Style) (items : List Item) (acc : String) :
     (render st items acc).toList = acc.toList ++ itemsChars st items := by
   fun_induction render st items acc <;>
     simp_all [itemsChars, itemChars, chars, elemChars, memberChars, toList_stringTo]
 
 /-! ## Well-formedness -/
 
-theorem toList_precedes_true (st : Style) (d : Nat) : (st.precedes d true).toList = [] := by
+private theorem toList_precedes_true (st : Style) (d : Nat) : (st.precedes d true).toList = [] := by
   simp [Style.precedes]
 
 mutual
 
-theorem spec_value (st : Style) (d : Nat) : ∀ (j : Json), canonicalNumbers j = true →
+private theorem spec_value (st : Style) (d : Nat) : ∀ (j : Json), canonicalNumbers j = true →
     ∀ r, Spec.Value (chars st d j ++ r) j r
   | .null, _, r => by simpa [chars] using Spec.Value.null (r := r)
   | .bool true, _, r => by simpa [chars] using Spec.Value.true_ (r := r)
@@ -522,7 +529,8 @@ theorem spec_value (st : Style) (d : Nat) : ∀ (j : Json), canonicalNumbers j =
       rw [hchars]
       simpa [String.toList_append, List.append_assoc] using hobj
 
-theorem spec_elements (st : Style) (d : Nat) : ∀ (l : List Json), canonicalNumbersList l = true →
+private theorem spec_elements (st : Style) (d : Nat) :
+    ∀ (l : List Json), canonicalNumbersList l = true →
     l ≠ [] → ∀ r, Spec.Elements (elemChars st d l true ++ r) l r
   | [], _, hne, _ => absurd rfl hne
   | [j], h, _, r => by
@@ -539,7 +547,7 @@ theorem spec_elements (st : Style) (d : Nat) : ∀ (l : List Json), canonicalNum
       (spec_elements st d (j' :: rest) hrest (by simp) r)
     simpa [elemChars, toList_precedes_true, List.append_assoc] using hmore
 
-theorem spec_members (st : Style) (d : Nat) : ∀ (l : List (String × Json)),
+private theorem spec_members (st : Style) (d : Nat) : ∀ (l : List (String × Json)),
     canonicalNumbersFields l = true → l ≠ [] → ∀ r,
       Spec.Members (memberChars st d l true ++ r) l r
   | [], _, hne, _ => absurd rfl hne
@@ -550,7 +558,8 @@ theorem spec_members (st : Style) (d : Nat) : ∀ (l : List (String × Json)),
     simpa [memberChars, toList_precedes_true, List.append_assoc] using
       Spec.Members.one hmem
   | (k, v) :: kv' :: rest, h, _, r => by
-    obtain ⟨hv, hrest⟩ : canonicalNumbers v = true ∧ canonicalNumbersFields (kv' :: rest) = true := by
+    obtain ⟨hv, hrest⟩ :
+        canonicalNumbers v = true ∧ canonicalNumbersFields (kv' :: rest) = true := by
       simpa [canonicalNumbersFields, Bool.and_eq_true] using h
     have hmem := Spec.Member.mk
       (spec_str k (st.colon.toList ++ (chars st d v ++ ((st.precedes d false).toList ++
@@ -568,14 +577,14 @@ end
 
 /-! ## What the printer emits is JSON text -/
 
-theorem toList_compress (j : Json) : (compress j).toList = chars Style.compact 0 j := by
+private theorem toList_compress (j : Json) : (compress j).toList = chars Style.compact 0 j := by
   simp [compress, toList_render, itemsChars, itemChars]
 
-theorem toList_pretty (j : Json) (indent : Nat) :
+private theorem toList_pretty (j : Json) (indent : Nat) :
     (pretty j indent).toList = chars (Style.pretty indent) 0 j := by
   simp [pretty, toList_render, itemsChars, itemChars]
 
-theorem spec_text (st : Style) {j : Json} (h : CanonicalNumbers j) :
+private theorem spec_text (st : Style) {j : Json} (h : CanonicalNumbers j) :
     Spec.Text (chars st 0 j) j :=
   ⟨chars st 0 j, [], Spec.Ws.nil, by simpa using spec_value st 0 j h [], Spec.Ws.nil⟩
 
@@ -600,5 +609,4 @@ whose bytes are by definition the UTF-8 encoding of its characters.
 -/
 theorem isValidUTF8_toByteArray (s : String) : s.toByteArray.IsValidUTF8 :=
   String.utf8Encode_toList ▸ ByteArray.isValidUTF8_utf8Encode
-
-end Test.Printer.Soundness
+end Json.Printer

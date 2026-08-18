@@ -4,12 +4,11 @@ Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import Test.Runner
 import Test.Number
+import Test.Api
 import Test.Basic
-import Test.Fold
 import Test.Spec
 import Test.Parser
 import Test.Printer
-import Test.Printer.Soundness
 import Test.FromTo
 import Test.Query
 import Test.Stream

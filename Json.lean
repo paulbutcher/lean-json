@@ -11,6 +11,7 @@ public import Json.Parser
 public import Json.Printer
 public import Json.FromTo
 public import Json.Query
+public import Json.Printer.Soundness
 public import Json.Stream
 
 /-!

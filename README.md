@@ -131,6 +131,10 @@ Proved:
 - Deduplicating an object's field names leaves every lookup unchanged, repeats no name, and
   leaves an object that repeats none alone.
 
+Each of these ships as a theorem in the library rather than as a check beside the tests, so a
+proof of your own can cite it: `Json.get?_set?`, `Json.findLast?_dedupKeys`,
+`Json.Printer.textOf_compress` and the rest are importable with the code they describe.
+
 Not proved, and covered by tests instead:
 
 - **Parser soundness against the grammar.** It needs an invariant relating a machine state to a
