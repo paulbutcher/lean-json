@@ -231,6 +231,8 @@ Json/Array.lean          general array facts the field lemmas need, absent from 
 Json/Basic.lean          Json, constructors, instances, UniqueKeys, field and depth lemmas
 Json/Number.lean         Number, Canonical, Eqv, Ord, bounded conversions
 Json/Spec.lean           RFC 8259 grammar as an inductive Prop
+Json/Spec/Unambiguity.lean
+                         one text names at most one value
 Json/Parser.lean         iterative parser, Config, structured Error
 Json/Parser/Soundness.lean
                          the position-to-characters bridge, leaf and machine soundness
@@ -371,7 +373,18 @@ nothing. That is one of the two rejection proofs in the tests.
 than using existentially quantified concatenations. It makes both construction and inversion
 tractable. It also means the relations are deliberately *not* deterministic in that remainder,
 exactly as the ABNF is not: `12` derives as `1` with `2` left over. Determinism is a property of
-`Text`, where the remainder must be empty, and proving it is the outstanding Phase 3 item.
+`Text`, where the remainder must be empty, and `text_unique` proves it.
+
+**Why one text names one value.** Two things pin a derivation down. A value is followed by the
+end of the text, or by a separator, or by a closing bracket, never by a character it could have
+consumed itself; that is what `Follows` says, and it is what makes `12` unambiguous once the
+whole text has to be accounted for. And `ws` sits on both sides of every structural character in
+the ABNF, so two derivations of one text can divide a run of spaces between two tokens
+differently; `WsEq` records that two remainders differ by whitespace alone, and the structural
+character that comes next stands in the same place either way. The six relations of the value
+family are one mutual definition, which the `induction` tactic will not take apart, so the proof
+runs by induction on the length of the text, which every production shortens, and within a single
+length proves the six in the order they depend on one another.
 
 ```lean
 -- soundness: no false accepts, in every mode. Proved. Stated modulo the BOM, per D18,
@@ -393,8 +406,8 @@ Spec.Value bs j → parse .allow bs = .ok j
 Spec.Value bs j → UniqueKeys j  → parse .reject bs = .ok j
 Spec.Value bs j → ¬UniqueKeys j → (parse .reject bs).isError
 
--- the grammar transcription is unambiguous, which validates the spec itself
-Spec.Value bs j₁ → Spec.Value bs j₂ → j₁ = j₂
+-- the grammar transcription is unambiguous, which validates the spec itself. Proved
+Spec.Text bs j₁ → Spec.Text bs j₂ → j₁ = j₂
 
 -- output is always well formed, and always valid UTF-8. Proved
 CanonicalNumbers j → Spec.TextOf (compress j) j
@@ -590,6 +603,22 @@ caught means building without `Json/Parser/Soundness.lean` and without the names
 `test/Test/Api.lean` holds it to. That the two can be separated so easily is worth remembering:
 it is the only way to ask what the tests are worth on their own.
 
+The unambiguity proof was confronted with three mutations of the grammar, and one of them is
+caught by nothing else in the repository. Letting an unescaped quotation mark be an ordinary
+character makes `["","a"]` derive both a two-element array and the one-element array holding
+`,"a`; the parser and printer soundness proofs still compile, all 222 tests and all 46 in the
+companion still pass, the 318 corpus files among them, and `Json/Spec/Unambiguity.lean` fails.
+That it is invisible elsewhere has a reason worth stating: soundness of the parser and of the
+printer each say that a derivation exists, and a grammar that derives too much satisfies them
+more easily rather than less. Only a claim that the grammar derives at most one value can catch
+a transcription that says too much.
+
+The other two are caught twice over. Counting a minus sign as whitespace makes `[-1]` derive
+both `[-1]` and `[1]`, since the whitespace after `[` may eat the sign, and it fails six tests as
+well as the proof, `isWs` being a definition the tests exercise directly. Dropping the decimal
+point from `frac` fails the printer's soundness proof too, since the printer then emits text the
+grammar reads as two numbers.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
@@ -657,8 +686,9 @@ No open questions. Work deliberately postponed:
       escapes, a surrogate pair, empty and populated arrays and objects, and nesting
 - [x] Two rejection proofs, that `"\ud800"` and `01` denote nothing. The inversion lemmas they
       need ship with the grammar, since reasoning against it is what a client does too
-- [ ] Unambiguity theorem. See the note below on why the relation is deliberately not
-      deterministic in its remainder
+- [x] Unambiguity theorem, `text_unique`: one text names at most one value. See the note in
+      section 8 on the two conditions it turns on, and on why an induction over the length of
+      the text stands in for one over a mutual family
 
 **Phase 4. Parser**
 - [x] `Config` (duplicate keys, `maxDepth`, `maxNumberDigits`, BOM), structured `Error` with a

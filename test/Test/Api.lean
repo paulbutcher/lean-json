@@ -54,6 +54,7 @@ example := @Json.Parser.str_sound
 example := @Json.Parser.text_parseFrom
 example := @Json.Parser.text_parse
 example := @Json.Parser.textOf_parseBytes
+example := @Json.Parser.eq_of_textOf
 
 /-- The headline claim, reached through the entry point a caller actually calls. -/
 example {s : String} {j : Json} (h : Json.parse s { ignoreBOM := false } = .ok j) :
@@ -63,6 +64,11 @@ example := @Json.Printer.textOf_compress
 example := @Json.Printer.textOf_pretty
 example := @Json.Printer.spec_renderString
 example := @Json.Printer.isValidUTF8_toByteArray
+
+example := @Json.Spec.num_unique
+example := @Json.Spec.str_unique
+example := @Json.Spec.text_unique
+example := @Json.Spec.textOf_unique
 
 example := @Json.Spec.ws_eq_of_not_isWs
 example := @Json.Spec.char_not_surrogate

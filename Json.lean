@@ -7,6 +7,7 @@ module
 public import Json.Number
 public import Json.Basic
 public import Json.Spec
+public import Json.Spec.Unambiguity
 public import Json.Parser
 public import Json.Printer
 public import Json.FromTo

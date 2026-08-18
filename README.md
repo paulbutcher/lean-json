@@ -119,6 +119,10 @@ points, so there is nothing to build.
 
 Proved:
 
+- One text names at most one value: `Spec.text_unique`. That is a claim about the transcription
+  rather than about the code, and it is the one that would catch a grammar saying more than the
+  RFC does, which no proof about the parser or the printer can. With it, `Parser.eq_of_textOf`
+  says the value the parser returns is the value the RFC names, there being no other.
 - Whatever the parser accepts, the grammar derives: `parse s cfg = .ok j` gives
   `Spec.TextOf s j`, so no text is ever read as a value the RFC does not say it denotes. Leaves
   and machine alike are covered, the machine by way of `Closes`, which says what the frames still

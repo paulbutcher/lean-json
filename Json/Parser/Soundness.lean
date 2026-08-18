@@ -6,6 +6,7 @@ module
 
 public import Json.Parser
 public import Json.Spec
+public import Json.Spec.Unambiguity
 
 public section
 
@@ -859,6 +860,15 @@ theorem textOf_parse {s : String} {cfg : Config} {j : Json} (hbom : cfg.ignoreBO
     show Spec.Text s.toList j
     rw [← remaining_startPos]
     exact text_parseFrom h
+
+
+/--
+The value the parser returns is the value the grammar names, there being no other: soundness says
+the text derives it, and `Spec.textOf_unique` says the text derives nothing else.
+-/
+theorem eq_of_textOf {s : String} {cfg : Config} {j j' : Json} (hbom : cfg.ignoreBOM = false)
+    (h : parse s cfg = .ok j) (ht : Spec.TextOf s j') : j = j' :=
+  Spec.textOf_unique (textOf_parse hbom h) ht
 
 /-- Bytes the parser accepts are UTF-8 for a text of the grammar. -/
 theorem textOf_parseBytes {b : ByteArray} {cfg : Config} {j : Json} (hbom : cfg.ignoreBOM = false)
