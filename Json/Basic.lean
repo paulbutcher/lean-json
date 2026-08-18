@@ -206,6 +206,27 @@ end
 
 abbrev CanonicalNumbers (j : Json) : Prop := canonicalNumbers j = true
 
+mutual
+
+/--
+How deeply the value nests: zero for a scalar, and one more than its deepest member for a
+container. An empty container is one, entering it being what costs.
+-/
+def depth : Json → Nat
+  | arr elems => depthList elems.toList + 1
+  | obj fields => depthFields fields.toList + 1
+  | _ => 0
+
+def depthList : List Json → Nat
+  | [] => 0
+  | j :: rest => max (depth j) (depthList rest)
+
+def depthFields : List (String × Json) → Nat
+  | [] => 0
+  | (_, v) :: rest => max (depth v) (depthFields rest)
+
+end
+
 def getBool? : Json → Except String Bool
   | bool b => .ok b
   | _ => .error "expected a boolean"

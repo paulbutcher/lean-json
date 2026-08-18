@@ -59,6 +59,48 @@ example : uniqueKeys (.arr #[.obj #[("a", .null)], .obj #[("a", .null)]]) = true
 
 example : mergeObj (.obj #[("a", .num 1), ("b", .num 2)]) (.obj #[("a", .num 3)])
     = .obj #[("a", .num 3), ("b", .num 2)] := by simp
+/-! ## Depth
+
+A derived decoder is handed the depth of the value it is to read, and spends one of it per
+level. What makes that enough is that every member is strictly shallower than the container it
+came out of, which is what these say.
+-/
+
+theorem depth_le_depthList {j : Json} : ∀ {l : List Json}, j ∈ l → depth j ≤ depthList l
+  | _ :: _, .head _ => by simp [depthList, Nat.le_max_left]
+  | _ :: rest, .tail _ h => by
+    have := depth_le_depthList (l := rest) h
+    simp only [depthList]
+    omega
+
+theorem depth_le_depthFields {k : String} {v : Json} :
+    ∀ {l : List (String × Json)}, (k, v) ∈ l → depth v ≤ depthFields l
+  | _ :: _, .head _ => by simp [depthFields, Nat.le_max_left]
+  | _ :: rest, .tail _ h => by
+    have := depth_le_depthFields (l := rest) h
+    simp only [depthFields]
+    omega
+
+theorem depth_arr_lt {j : Json} {elems : Array Json} (h : j ∈ elems) :
+    depth j < depth (.arr elems) := by
+  have hmem : j ∈ elems.toList := by simpa using h
+  have := depth_le_depthList hmem
+  simp only [depth]
+  omega
+
+theorem depth_obj_lt {k : String} {v : Json} {fields : Array (String × Json)}
+    (h : (k, v) ∈ fields) : depth v < depth (.obj fields) := by
+  have hmem : (k, v) ∈ fields.toList := by simpa using h
+  have := depth_le_depthFields hmem
+  simp only [depth]
+  omega
+
+example : depth .null = 0 := by simp [depth]
+
+example : depth (.arr #[]) = 1 := by simp [depth, depthList]
+
+example : depth (.obj #[("a", .arr #[.num 1])]) = 2 := by
+  simp [depth, depthList, depthFields]
 
 /--
 Deduplication leaves every lookup unchanged. Stated at `Nat` values, where generators exist;

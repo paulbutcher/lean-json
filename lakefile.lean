@@ -12,9 +12,14 @@ package json where
 lean_lib Json
 
 -- Tests live in a subproject so that nothing test-only appears in the dependency
--- graph a consumer resolves.
+-- graph a consumer resolves. The companion package keeps its own, run here as well so that
+-- one command covers both.
 @[test_driver]
 script tests do
-  let child ← IO.Process.spawn
+  let library ← IO.Process.spawn
     { cmd := "lake", args := #["test"], cwd := __dir__ / "test" }
-  child.wait
+  let libraryResult ← library.wait
+  let companion ← IO.Process.spawn
+    { cmd := "lake", args := #["test"], cwd := __dir__ / "deriving" / "test" }
+  let companionResult ← companion.wait
+  return if libraryResult == 0 then companionResult else libraryResult

@@ -19,7 +19,16 @@ jobs:
       # `warningAsError` in the lakefile, so no build flag is needed here.
       - uses: leanprover/lean-action@v1
 
+      - name: Build the companion package
+        run: lake build
+        working-directory: deriving
+
+      # Reads the constraint off the compiled form rather than the source: nothing from the
+      # Lean package may be reachable when a consumer's program runs.
+      - name: Nothing from the Lean package at run time
+        run: ./scripts/check-runtime.sh
+
       # Run the tests explicitly rather than relying on the action's defaults. The root
-      # test driver spawns the test subproject, which carries the test-only dependencies.
+      # test driver spawns both test subprojects, which carry the test-only dependencies.
       - name: Run tests
         run: lake test

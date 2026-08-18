@@ -25,8 +25,9 @@ supersede it rather than editing history. Check items off in the build order as 
 4. **Stack safety by construction.** Every operation whose input can be deeply nested uses
    an explicit heap-allocated work stack, never recursion on the C stack.
 
-   As of Phase 2 this holds for the default path but not universally. `beq`, `hash` and
-   `uniqueKeys` recurse, and what protects them is `maxDepth`: a value obtained from `parse`
+   As of Phase 2 this holds for the default path but not universally. `beq`, `hash`,
+   `uniqueKeys` and `depth` recurse, as do the codecs the companion generates, and what
+   protects them is `maxDepth`: a value obtained from `parse`
    under the default configuration is depth-bounded, so recursing over it cannot overflow. A
    value built programmatically, or parsed with `maxDepth := none`, can be arbitrarily deep,
    and those three are then at risk. Replacing them with work-stack versions is tracked in
@@ -145,6 +146,23 @@ saw `"roles": ["_admin"]`.
   `require jsonDeriving from git "..." @ "..." / "deriving"`, which Lake supports. One
   repository keeps the two versions in lockstep, mirroring the arrangement already used for
   `test/`.
+- **D31. The companion's modules are rooted at `JsonDeriving`, superseding D22's
+  `Json.Deriving`.** A Lake library's globs claim a whole module namespace, so a root library
+  named `Json` looks for `Json/Deriving/*.lean` in the root package and fails to find the
+  companion's files there. The package is still `jsonDeriving` and the declarations still live
+  in the `Json.Deriving` namespace; only the module path moves.
+- **D32. A derived decoder takes a count rather than being `partial`.** Nothing tells Lean that
+  a field is smaller than the value it came out of, so a decoder for a recursive type cannot be
+  seen to terminate; core writes `partial` and we will not. The generated function takes a
+  `Nat`, spends one per level, and the instance seeds it with `Json.depth j + 1`, which is
+  always enough because every member is strictly shallower than its container. Running out is
+  an error rather than a wrong answer, so the failure mode is honest even if that reasoning
+  were ever wrong. Encoders need none of this: recursion on the value is structural.
+- **D33. Recursion is generated for a field of the derived type, or an `Array`, `List` or
+  `Option` of it, and refused for anything else,** with an error naming the field. A type
+  mentioning itself under `Prod`, a map, or another type constructor is rare, and a clear
+  refusal at derive time beats either a wrong instance or a `partial` one. Mutually defined
+  types are refused for the same reason.
 - **D23. Pretty-printing defaults are a two-space indent, 80-column width, one space after
   `:`, and no spaces anywhere in `compress`.** Core's exact layout is not matched.
 - **D24. The codec classes live in the `Json` namespace,** as `Json.ToJson` and
@@ -218,7 +236,8 @@ Json/Query.lean          total accessors, path lookup, merge, update
 Json/Stream.lean         IO.FS.Stream helpers
 test/                    own lakefile, requires root by path, plus plausible
 test/corpus/             JSONTestSuite, vendored under its own licence
-deriving/                own lakefile, companion package, meta imports Lean
+deriving/JsonDeriving/   own lakefile, companion package, meta imports Lean
+deriving/test/           own lakefile, requires the companion by path
 ```
 
 The companion holds only the deriving handlers and `json%`.
@@ -348,7 +367,8 @@ aspirational.
 
 - [x] `Number`: `toString`, `Ord`, `Neg`, `OfScientific`, `OfNat`, shifts, `toFloat`,
       `ofFloat?`, bounded `toInt?` / `toNat?`
-- [x] `Json`: `DecidableEq`, `Hashable`, `Inhabited`, `Repr`, coercions, `mkObj`, `isNull`
+- [x] `Json`: `DecidableEq`, `Hashable`, `Inhabited`, `Repr`, coercions, `mkObj`, `isNull`,
+      and `depth`, which core has no equivalent of and a derived decoder needs
 - [x] Accessors: `getObj?`, `getArr?`, `getStr?`, `getNat?`, `getInt?`, `getBool?`, `getNum?`,
       `getObjVal?`, `getArrVal?`, `getObjValD`, `setObjVal`, `mergeObj`, `Structured`
 - [x] `parse`, `parseBytes`
@@ -359,7 +379,7 @@ aspirational.
 - [x] Helpers: `getObjValAs?`, `setObjValAs?`, `opt`, `getTag?`, `parseTagged`,
       `parseCtorFields`, `bignumFromJson?`, `bignumToJson`, `toStructured?`
 - [x] Stream helpers: `readJson`, `readJsonToEnd`, `writeJson`, `writeJsonPretty`
-- [ ] Companion package: `deriving ToJson, FromJson`, `json%`
+- [x] Companion package: `deriving ToJson, FromJson`, `json%`
 
 ## 11. Testing
 
@@ -424,6 +444,16 @@ without canonicalising them failed the corpus round trip and both sweeps at once
 narrowing the range of characters the printer escapes, never reached the tests: it fails a proof
 instead, which is where a printer mutation ought to be caught.
 
+Phase 9's mutations were aimed at generated code, which is only ever seen through what it does.
+Seeding a derived decoder with a fixed count of one rather than the depth of the value failed
+six tests, all of them about recursion and none about anything else; keeping the `?` on an
+optional field name failed exactly the two tests about optional fields; and dropping the sign
+from a negative literal failed the two that write one. The runtime check was confronted the same
+way: a `Lean.Name` defined in ordinary rather than meta code, which compiles perfectly well,
+makes it fail. Turning the meta import into an ordinary one does not, because it does not
+compile at all, the module system refusing a meta declaration that reaches for a constant it
+was not given.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
@@ -432,8 +462,10 @@ No open questions. Work deliberately postponed:
   corpus rather than on proof, and the README must say so.
 - **Subquadratic digit conversion.** A divide-and-conquer `Int`-from-digits conversion would
   let `maxNumberDigits := none` be the default rather than a documented hazard, retiring D21.
-- **Work-stack versions of `beq`, `hash` and `uniqueKeys`,** so that stack safety no longer
-  depends on the parser's depth bound. See the note under constraint 4.
+- **Work-stack versions of `beq`, `hash`, `uniqueKeys` and `depth`,** so that stack safety no
+  longer depends on the parser's depth bound. See the note under constraint 4. Generated codecs
+  join the same list: they recurse on the C stack, and what protects them is the same depth
+  bound, since a value that came from `parse` under the default configuration is bounded.
 - **Proofs for `dedupKeys`,** which want a small library of `Array.foldl` characterisation
   lemmas that would also serve the parser and printer proofs.
 - **Index-based scanning in the parser,** to remove the 37x memory amplification measured in
@@ -573,9 +605,16 @@ No open questions. Work deliberately postponed:
       non-object, two spellings of one number that cannot disagree, and the teardown check
 
 **Phase 9. Companion package**
-- [ ] `deriving/` subproject, `deriving ToJson, FromJson`
-- [ ] `json%`
-- [ ] Test that a consumer's binary links nothing from the `Lean` package
+- [x] `deriving/` subproject, `deriving ToJson, FromJson`, for structures, enumerations and
+      inductives, with optional `field?` names, and recursion through the type itself or an
+      `Array`, `List` or `Option` of it. Neither direction is `partial`, per D32
+- [x] `json%`
+- [x] `scripts/check-runtime.sh`, which reads the claim off what the compiler produced rather
+      than off the source: no compiled module of the library mentions the Lean package, the
+      companion's runtime initialiser starts no Lean module where its meta initialiser starts
+      three, and a consumer's own modules mention nothing from it either
+- [x] 46 tests in the companion's own subproject, which `lake test` at the root now runs after
+      the library's own
 
 **Phase 10. Release**
 - [ ] Benchmarks, as regression tracking rather than a gate

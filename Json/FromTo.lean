@@ -238,6 +238,31 @@ def parseTagged (j : Json) (tag : String) (nFields : Nat)
   else
     parseCtorFields j tag nFields fieldNames?
 
+
+/-! ## What a derived codec needs
+
+A derived decoder reaches its constructor's fields by position, and reaches a recursive position
+through a function it is in the middle of defining, so neither can go through an instance. These
+are what it calls instead.
+-/
+
+/-- The `i`th of a constructor's fields, without the panic that indexing carries. -/
+def ctorField? (fields : Array Json) (i : Nat) : Except String Json :=
+  match fields[i]? with
+  | some j => .ok j
+  | none => .error s!"expected more than {i} fields, got {fields.size}"
+
+def arrayOf? (decode : Json → Except String α) : Json → Except String (Array α)
+  | arr elems => elems.mapM decode
+  | _ => .error "expected an array"
+
+def listOf? (decode : Json → Except String α) (j : Json) : Except String (List α) :=
+  Array.toList <$> arrayOf? decode j
+
+def optionOf? (decode : Json → Except String α) : Json → Except String (Option α)
+  | null => .ok none
+  | j => some <$> decode j
+
 end
 
 end Json
