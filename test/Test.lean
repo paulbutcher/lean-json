@@ -21,7 +21,7 @@ namespace Test
 -- Each test module contributes its cases here. Modules that consist only of
 -- theorems need no entry: compiling them is passing.
 def all : Array TestCase :=
-  Test.Number.all ++ Test.Parser.all ++ Test.Printer.all ++
+  Test.Parser.all ++ Test.Printer.all ++
     Test.FromTo.all ++ Test.Query.all ++
     Test.Stream.all ++ Test.Conformance.all ++ Test.Fuzz.all ++ Test.Regression.all
 

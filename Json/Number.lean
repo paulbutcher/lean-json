@@ -257,6 +257,44 @@ where
   termination_by n
   decreasing_by omega
 
+private theorem digitCountGo_bounds : ∀ (n acc : Nat), 1 ≤ n →
+    ∃ e, digitCount.go n acc = acc + e ∧ 10 ^ e ≤ n ∧ n < 10 ^ (e + 1) := by
+  intro n
+  induction n using Nat.strongRecOn with
+  | ind n ih =>
+    intro acc hn
+    rw [digitCount.go]
+    split
+    next h => exact ⟨0, by simp, by simpa using hn, by simp; omega⟩
+    next h =>
+      obtain ⟨e, he, hle, hlt⟩ := ih (n / 10) (by omega) (acc + 1) (by omega)
+      have hs : (10 : Nat) ^ (e + 1) = 10 ^ e * 10 := Nat.pow_succ ..
+      have hs' : (10 : Nat) ^ (e + 1 + 1) = 10 ^ (e + 1) * 10 := Nat.pow_succ ..
+      exact ⟨e + 1, by omega, by omega, by omega⟩
+theorem one_le_digitCount (m : Int) : 1 ≤ digitCount m := by
+  rcases Nat.eq_zero_or_pos m.natAbs with h | h
+  · simp [digitCount, h, digitCount.go]
+  · obtain ⟨e, he, _, _⟩ := digitCountGo_bounds m.natAbs 1 h
+    simp only [digitCount, he]
+    omega
+
+theorem natAbs_lt_pow_digitCount (m : Int) : m.natAbs < 10 ^ digitCount m := by
+  rcases Nat.eq_zero_or_pos m.natAbs with h | h
+  · simp [digitCount, h, digitCount.go]
+  · obtain ⟨e, he, _, hlt⟩ := digitCountGo_bounds m.natAbs 1 h
+    simp only [digitCount, he]
+    have : (1 : Nat) + e = e + 1 := by omega
+    rw [this]
+    exact hlt
+
+theorem pow_digitCount_le {m : Int} (h : m ≠ 0) : 10 ^ (digitCount m - 1) ≤ m.natAbs := by
+  have hpos : 0 < m.natAbs := Int.natAbs_pos.mpr h
+  obtain ⟨e, he, hle, _⟩ := digitCountGo_bounds m.natAbs 1 hpos
+  simp only [digitCount, he]
+  have : 1 + e - 1 = e := by omega
+  rw [this]
+  exact hle
+
 /--
 Whether `a` denotes a smaller value than `b`. Only the sign, the position of the leading digit,
 and mantissas aligned to a common digit count are ever computed, so the exponent's magnitude
@@ -279,6 +317,179 @@ def isLt (a b : Number) : Bool :=
     else
       a.mantissa < b.mantissa * 10 ^ (dA - dB).toNat
 
+private theorem natAbs_scaleTo (n : Number) (k : Int) :
+    (n.scaleTo k).natAbs = n.mantissa.natAbs * 10 ^ (n.exponent - k).toNat := by
+  simp [scaleTo, Int.natAbs_mul, Int.natAbs_pow]
+private theorem scaleTo_pos_iff (n : Number) (k : Int) : 0 < n.scaleTo k ↔ 0 < n.mantissa := by
+  constructor
+  · intro h
+    exact Int.lt_of_mul_lt_mul_right (by simpa [scaleTo] using h) (Int.le_of_lt (pow_ten_pos _))
+  · intro h
+    exact Int.mul_pos h (pow_ten_pos _)
+
+private theorem scaleTo_neg_iff (n : Number) (k : Int) : n.scaleTo k < 0 ↔ n.mantissa < 0 := by
+  constructor
+  · intro h
+    exact Int.lt_of_mul_lt_mul_right (by simpa [scaleTo] using h) (Int.le_of_lt (pow_ten_pos _))
+  · intro h
+    exact Int.mul_neg_of_neg_of_pos h (pow_ten_pos _)
+
+private theorem scaleTo_eq_zero_iff (n : Number) (k : Int) :
+    n.scaleTo k = 0 ↔ n.mantissa = 0 := by
+  simp [scaleTo, Int.mul_eq_zero, pow_ten_ne_zero]
+private theorem scaleTo_lt_pow (n : Number) (k : Int) :
+    (n.scaleTo k).natAbs < 10 ^ (digitCount n.mantissa + (n.exponent - k).toNat) := by
+  rw [natAbs_scaleTo, Nat.pow_add]
+  exact (Nat.mul_lt_mul_right (Nat.pow_pos (by omega))).mpr (natAbs_lt_pow_digitCount _)
+
+private theorem pow_le_scaleTo {n : Number} (h : n.mantissa ≠ 0) (k : Int) :
+    10 ^ (digitCount n.mantissa - 1 + (n.exponent - k).toNat) ≤ (n.scaleTo k).natAbs := by
+  rw [natAbs_scaleTo, Nat.pow_add]
+  exact Nat.mul_le_mul_right _ (pow_digitCount_le h)
+
+private theorem natAbs_scaleTo_lt {a b : Number} {k : Int} (hb : b.mantissa ≠ 0)
+    (h : digitCount a.mantissa + (a.exponent - k).toNat
+       < digitCount b.mantissa + (b.exponent - k).toNat) :
+    (a.scaleTo k).natAbs < (b.scaleTo k).natAbs := by
+  have h1 := scaleTo_lt_pow a k
+  have h2 := pow_le_scaleTo hb k
+  have hd : 1 ≤ digitCount b.mantissa := one_le_digitCount _
+  have hmono : (10:Nat) ^ (digitCount a.mantissa + (a.exponent - k).toNat)
+      ≤ 10 ^ (digitCount b.mantissa - 1 + (b.exponent - k).toNat) :=
+    Nat.pow_le_pow_right (by omega) (by omega)
+  omega
+
+private theorem scaleTo_nonneg_iff (n : Number) (k : Int) :
+    0 ≤ n.scaleTo k ↔ 0 ≤ n.mantissa := by
+  have h1 := scaleTo_pos_iff n k
+  have h2 := scaleTo_eq_zero_iff n k
+  omega
+
+private theorem scaleTo_split {n : Number} {k : Int} {d c : Nat}
+    (h : (n.exponent - k).toNat = d + c) :
+    n.scaleTo k = (n.mantissa * 10 ^ d) * 10 ^ c := by
+  simp only [scaleTo, h, Int.pow_add, Int.mul_assoc]
+
+private theorem aligned_left {a b : Number} {k : Int} (hkb : k ≤ b.exponent)
+    (hd : digitCount a.mantissa < digitCount b.mantissa)
+    (hs : (digitCount a.mantissa : Int) + a.exponent
+        = (digitCount b.mantissa : Int) + b.exponent) :
+    (a.mantissa * 10 ^ ((digitCount b.mantissa : Int) - (digitCount a.mantissa : Int)).toNat
+        < b.mantissa) ↔ a.scaleTo k < b.scaleTo k := by
+  have hA : a.scaleTo k =
+      (a.mantissa * 10 ^ ((digitCount b.mantissa : Int) - (digitCount a.mantissa : Int)).toNat)
+        * 10 ^ (b.exponent - k).toNat :=
+    scaleTo_split (by omega)
+  have hB : b.scaleTo k = b.mantissa * 10 ^ (b.exponent - k).toNat := by
+    simp [scaleTo]
+  rw [hA, hB]
+  exact (Int.mul_lt_mul_right (pow_ten_pos _)).symm
+
+private theorem aligned_right {a b : Number} {k : Int} (hka : k ≤ a.exponent)
+    (hd : digitCount b.mantissa ≤ digitCount a.mantissa)
+    (hs : (digitCount a.mantissa : Int) + a.exponent
+        = (digitCount b.mantissa : Int) + b.exponent) :
+    (a.mantissa
+        < b.mantissa * 10 ^ ((digitCount a.mantissa : Int) - (digitCount b.mantissa : Int)).toNat)
+      ↔ a.scaleTo k < b.scaleTo k := by
+  have hB : b.scaleTo k =
+      (b.mantissa * 10 ^ ((digitCount a.mantissa : Int) - (digitCount b.mantissa : Int)).toNat)
+        * 10 ^ (a.exponent - k).toNat :=
+    scaleTo_split (by omega)
+  have hA : a.scaleTo k = a.mantissa * 10 ^ (a.exponent - k).toNat := by
+    simp [scaleTo]
+  rw [hA, hB]
+  exact (Int.mul_lt_mul_right (pow_ten_pos _)).symm
+
+/--
+The efficient comparison agrees with the obvious one, which rescales both mantissas to a common
+exponent. Any `k` at or below both exponents will do, a factor of ten shared by the two sides
+leaving the comparison alone.
+-/
+theorem isLt_iff {a b : Number} {k : Int} (hka : k ≤ a.exponent) (hkb : k ≤ b.exponent) :
+    isLt a b = true ↔ a.scaleTo k < b.scaleTo k := by
+  have hpa := scaleTo_pos_iff a k
+  have hna := scaleTo_neg_iff a k
+  have hza := scaleTo_eq_zero_iff a k
+  have hqa := scaleTo_nonneg_iff a k
+  have hpb := scaleTo_pos_iff b k
+  have hnb := scaleTo_neg_iff b k
+  have hzb := scaleTo_eq_zero_iff b k
+  have hqb := scaleTo_nonneg_iff b k
+  have hp : ((a.exponent - k).toNat : Int) = a.exponent - k := Int.toNat_of_nonneg (by omega)
+  have hq : ((b.exponent - k).toNat : Int) = b.exponent - k := Int.toNat_of_nonneg (by omega)
+  unfold isLt
+  split
+  next h =>
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+    simp only [true_iff]
+    omega
+  split
+  next h =>
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+    refine iff_of_false (by simp) ?_
+    omega
+  split
+  next h =>
+    simp only [decide_eq_true_eq]
+    omega
+  split
+  next h =>
+    simp only [decide_eq_true_eq]
+    omega
+  rename_i h₁ h₂ ha0 hb0
+  simp only [Bool.and_eq_true, decide_eq_true_eq, not_and] at h₁ h₂
+  split
+  next hposa =>
+    have hposb : 0 < b.mantissa := by omega
+    have hAv : ((a.scaleTo k).natAbs : Int) = a.scaleTo k := Int.natAbs_of_nonneg (by omega)
+    have hBv : ((b.scaleTo k).natAbs : Int) = b.scaleTo k := Int.natAbs_of_nonneg (by omega)
+    simp only []
+    split
+    next hne =>
+      simp only [decide_eq_true_eq]
+      rcases Int.lt_trichotomy (digitCount a.mantissa + a.exponent : Int)
+          (digitCount b.mantissa + b.exponent : Int) with hs | hs | hs
+      · have := natAbs_scaleTo_lt (a := a) (b := b) (k := k) hb0 (by omega)
+        exact iff_of_true hs (by omega)
+      · exact absurd hs hne
+      · have := natAbs_scaleTo_lt (a := b) (b := a) (k := k) ha0 (by omega)
+        exact iff_of_false (by omega) (by omega)
+    next hne =>
+      split
+      next hd =>
+        simpa only [decide_eq_true_eq] using
+          aligned_left (a := a) (b := b) hkb (by omega) (by omega)
+      next hd =>
+        simpa only [decide_eq_true_eq] using
+          aligned_right (a := a) (b := b) hka (by omega) (by omega)
+  next hposa =>
+    have hnega : a.mantissa < 0 := by omega
+    have hnegb : b.mantissa < 0 := by omega
+    have hAv : ((a.scaleTo k).natAbs : Int) = -a.scaleTo k :=
+      Int.ofNat_natAbs_of_nonpos (by omega)
+    have hBv : ((b.scaleTo k).natAbs : Int) = -b.scaleTo k :=
+      Int.ofNat_natAbs_of_nonpos (by omega)
+    simp only []
+    split
+    next hne =>
+      simp only [decide_eq_true_eq]
+      rcases Int.lt_trichotomy (digitCount a.mantissa + a.exponent : Int)
+          (digitCount b.mantissa + b.exponent : Int) with hs | hs | hs
+      · have := natAbs_scaleTo_lt (a := a) (b := b) (k := k) hb0 (by omega)
+        exact iff_of_false (by omega) (by omega)
+      · exact absurd hs hne
+      · have := natAbs_scaleTo_lt (a := b) (b := a) (k := k) ha0 (by omega)
+        exact iff_of_true (by omega) (by omega)
+    next hne =>
+      split
+      next hd =>
+        simpa only [decide_eq_true_eq] using
+          aligned_left (a := a) (b := b) hkb (by omega) (by omega)
+      next hd =>
+        simpa only [decide_eq_true_eq] using
+          aligned_right (a := a) (b := b) hka (by omega) (by omega)
+
 /--
 The equality case is decided by canonical form, so it is exact; the remaining branch only has to
 choose between `lt` and `gt`, and can never report `eq`.
@@ -300,6 +511,26 @@ theorem cmp_eq_eq_iff_eqv {a b : Number} : cmp a b = .eq ↔ Eqv a b := by
 theorem cmp_eq_eq_iff_eq {a b : Number} (ha : Canonical a) (hb : Canonical b) :
     cmp a b = .eq ↔ a = b :=
   cmp_eq_eq_iff_eqv.trans (eqv_iff_eq ha hb)
+
+/-- Comparison agrees with rescaling both to a common exponent and comparing the integers. -/
+theorem cmp_eq_compare_scaleTo {a b : Number} {k : Int} (hka : k ≤ a.exponent)
+    (hkb : k ≤ b.exponent) : cmp a b = compare (a.scaleTo k) (b.scaleTo k) := by
+  unfold cmp
+  split
+  next h =>
+    have heq : a.scaleTo k = b.scaleTo k :=
+      scaleTo_eq_of_eqv hka hkb (eqv_iff_normalize_eq.mpr h)
+    simp [heq]
+  next h =>
+    have hne : a.scaleTo k ≠ b.scaleTo k := fun he =>
+      h (eqv_iff_normalize_eq.mp (eqv_of_scaleTo hka hkb he))
+    split
+    next hlt => exact (Int.compare_eq_lt.mpr ((isLt_iff hka hkb).mp hlt)).symm
+    next hlt =>
+      have hge : ¬ a.scaleTo k < b.scaleTo k := fun hc => hlt ((isLt_iff hka hkb).mpr hc)
+      exact (Int.compare_eq_gt.mpr (by omega)).symm
+
+
 
 /--
 The integer `n` denotes, when it denotes one and writing it out costs at most `maxPadding`

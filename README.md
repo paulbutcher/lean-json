@@ -143,6 +143,9 @@ Proved:
   were written; the second is a property of the machine, which carries the names it has seen.
 - Numeric equality and structural equality coincide on canonical numbers, which is what that
   agreement rests on.
+- Comparing two numbers by their leading digit positions, which is what keeps `1e1000000000`
+  cheap, gives the same answer as rescaling both to a common exponent and comparing the
+  integers, at every exponent rather than at the ones a generator reaches.
 - Every number the printer is asked to write, and every number `Number.ofFloat?` produces, is
   canonical.
 - The path operations hold their laws: what `set?` puts at a path is what `get?` finds there,
@@ -169,10 +172,11 @@ Not proved, and covered by tests instead:
 - **Absence of stack overflow and out-of-memory.** No theorem says a program will not run out of
   either. What is proved is that what runs is the traversal holding its work in a list; that this
   costs heap rather than stack is by construction, and evidenced by fuzzing. Two recursions sit
-  outside it: a codec the companion generates walks a value on the stack, and freeing a deeply
-  nested value is a recursion the library does not perform and cannot control. The second was
-  measured rather than argued: a million-deep value built and dropped repeatedly survives, with
-  peak memory flat across rounds.
+  outside it: a codec the companion generates walks a value as a recursion, and freeing a deeply
+  nested value is a recursion the library does not perform and cannot control. Both were
+  measured rather than argued: a derived tree three million deep encodes and decodes, and a
+  million-deep value built and dropped repeatedly survives with peak memory flat across rounds.
+  In both, memory is what runs out first on the machine this was measured on.
 - `Number.toFloat` is not verified against IEEE 754.
 
 ## Speed

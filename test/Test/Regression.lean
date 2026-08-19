@@ -79,8 +79,8 @@ def teardown : Array TestCase := #[
 
 /-!
 Every traversal of a value is a traversal of whatever a caller built, and nothing bounds how deep
-that is. These five walk the whole value, and each of them overflowed the stack before they were
-paired with a fold.
+that is. These five walk the whole value, and the case below is what says they still answer at a
+depth no test elsewhere reaches.
 -/
 def traversal : Array TestCase := #[
   { name := "a million deep is hashed, compared, checked and measured"

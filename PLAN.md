@@ -31,11 +31,17 @@ supersede it rather than editing history. Check items off in the build order as 
    `Json/Fold.lean` whose pending work is a list. Nothing downstream changes, since every
    theorem is stated about `=` and about the recursive form.
 
-   What still recurses is the codecs the companion generates, and what protects them is
-   `maxDepth`: a value obtained from `parse` under the default configuration is depth-bounded,
-   so recursing over it cannot overflow. A value built programmatically, or parsed with
-   `maxDepth := none`, can be arbitrarily deep, and a generated codec is then at risk. Freeing
-   a value is a recursion the library does not perform and cannot control.
+   What still recurses is the codecs the companion generates. How much that costs was measured
+   rather than assumed, and the answer is less than it looks: a derived tree three million deep
+   encodes and decodes, and what stops the next size up is memory rather than the stack. The
+   same holds for the traversals in their recursive form, which answer at twelve million deep
+   with 1.8 GB of heap and the main thread's stack never above 136 kB. Where compiled Lean puts
+   those frames was not established, only that a JSON traversal does not run out of them at any
+   depth this machine can hold, while the `Lean.Data.Json` parser, whose frames carry more, does
+   abort at ten million. So the fold buys a claim that holds whatever the compiler does with a
+   recursion, rather than a fix for a crash anyone has seen here, and a codec generated as a
+   machine would buy the same. Freeing a value stays a recursion the library does not perform
+   and cannot control.
 5. **New module system.** Both packages use `module` with explicit `public import` /
    `meta import`. This is what gives constraint 2 its teeth.
 
@@ -453,6 +459,7 @@ beqPairs l = l.all fun p => beq p.1 p.2
 
 -- numbers
 Canonical a → Canonical b → (Eqv a b ↔ a = b)
+k ≤ a.exponent → k ≤ b.exponent → cmp a b = compare (a.scaleTo k) (b.scaleTo k)
 ```
 
 Note the per-policy split in completeness. RFC 8259 section 4 observes that implementations
@@ -666,6 +673,13 @@ deep-traversal case `hash` and `depth` had no such caller in the suite at all, w
 they compare values that agree, which a comparison made too permissive still gets right. That is
 the argument for the new case, and it is an argument about coverage rather than about count.
 
+The comparison proof was confronted with three: ignoring the sign when two numbers sit at
+different leading digit positions, aligning the mantissas by the wrong difference of digit
+counts, and counting ten as one digit. Each fails `isLt_iff`, and each also fails one of the
+worked examples that were already there, so what the theorem adds here is not detection but
+reach: eleven worked pairs and a hundred sampled ones, against every pair there is, which is
+where an exponent no generator would draw, of the kind `1e1000000000` carries, now falls.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
@@ -677,9 +691,11 @@ No open questions. Work deliberately postponed:
   not visible from a signature.
 - **Subquadratic digit conversion.** A divide-and-conquer `Int`-from-digits conversion would
   let `maxNumberDigits := none` be the default rather than a documented hazard, retiring D21.
-- **A generated codec that does not recurse.** The handlers the companion writes walk a value on
-  the C stack, and what protects them is the depth bound, since a value that came from `parse`
-  under the default configuration is bounded. See the note under constraint 4.
+- **A generated codec that does not recurse.** The handlers the companion writes walk a value as
+  a recursion rather than through a work list. Deferred on the measurement under constraint 4:
+  three million deep encodes and decodes, and memory is what gives out first, so what a machine
+  would add is a claim that does not depend on the compiler rather than a fix for a crash. It
+  would also be a large piece of work, since the frames a machine needs are per derived type.
 
 ## 13. Build order
 
@@ -705,8 +721,9 @@ No open questions. Work deliberately postponed:
 - [x] `toString`, landed in Phase 5 where the rendering rule belongs
 - [x] `ofFloat?`, landed in Phase 6. It wants no parser after all: reading the IEEE fields is
       both exact and cheaper than reading back a printed decimal, per D26
-- [ ] The scale comparison inside `isLt` is covered by two properties rather than proved. Closing
-      it needs digit-count bounds, `10 ^ (digitCount m - 1) ≤ m.natAbs < 10 ^ digitCount m`
+- [x] The scale comparison inside `isLt` is proved rather than sampled: `cmp_eq_compare_scaleTo`
+      says the fast comparison agrees with rescaling both mantissas to any exponent at or below
+      both. What it turns on is `10 ^ (digitCount m - 1) ≤ m.natAbs < 10 ^ digitCount m`
 
 **Phase 2. Core type**
 - [x] `Json`, coercions, `mkObj`, `isNull`

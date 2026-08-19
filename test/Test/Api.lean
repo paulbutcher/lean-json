@@ -46,6 +46,10 @@ example := @Json.array_roundTrip
 example := @Json.list_roundTrip
 
 example := @Json.Number.eqv_iff_eq
+example := @Json.Number.isLt_iff
+example := @Json.Number.cmp_eq_compare_scaleTo
+example := @Json.Number.pow_digitCount_le
+example := @Json.Number.natAbs_lt_pow_digitCount
 example := @Json.Number.Eqv.symm
 example := @Json.Number.Eqv.trans
 example := @Json.Number.canonical_normalize

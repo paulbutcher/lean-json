@@ -3,10 +3,8 @@ Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import Json
-import Test.Runner
 
 open Json Json.Number
-open Plausible (NamedBinder)
 
 namespace Test.Number
 
@@ -70,32 +68,12 @@ example : digitCount (-99) = 2 := by simp
 
 /--
 The efficient comparison agrees with the obvious but bomb-prone one, which rescales both
-mantissas to a common exponent. Generated exponents stay small, so the reference side remains
-computable. This is a property rather than a theorem because the digit-count bounds that would
-verify the scale comparison are not yet established.
+mantissas to a common exponent and compares those. It holds at every exponent, the digit-count
+bounds the scale comparison turns on being proved rather than sampled.
 -/
-abbrev cmpAgreesWithRescaling : Prop :=
-  NamedBinder "ma" <| ∀ ma : Int, NamedBinder "ea" <| ∀ ea : Int,
-    NamedBinder "mb" <| ∀ mb : Int, NamedBinder "eb" <| ∀ eb : Int,
-      cmp ⟨ma, ea⟩ ⟨mb, eb⟩ =
-        compare (scaleTo ⟨ma, ea⟩ (min ea eb)) (scaleTo ⟨mb, eb⟩ (min ea eb))
-
-/--
-The same claim over a narrow exponent range. Independently drawn exponents almost never put two
-numbers at the same leading digit position, so the wide version above leaves the mantissa
-alignment branch unexercised.
--/
-abbrev cmpAgreesWithRescalingNearby : Prop :=
-  NamedBinder "ma" <| ∀ ma : Int, NamedBinder "ea" <| ∀ ea : Int,
-    NamedBinder "mb" <| ∀ mb : Int, NamedBinder "eb" <| ∀ eb : Int,
-      let ea := ea % 5
-      let eb := eb % 5
-      cmp ⟨ma, ea⟩ ⟨mb, eb⟩ =
-        compare (scaleTo ⟨ma, ea⟩ (min ea eb)) (scaleTo ⟨mb, eb⟩ (min ea eb))
-
-def all : Array TestCase := #[
-  property "cmp agrees with rescaling to a common exponent" cmpAgreesWithRescaling,
-  property "cmp agrees with rescaling for nearby exponents" cmpAgreesWithRescalingNearby
-]
+example (ma ea mb eb : Int) :
+    cmp ⟨ma, ea⟩ ⟨mb, eb⟩ =
+      compare (scaleTo ⟨ma, ea⟩ (min ea eb)) (scaleTo ⟨mb, eb⟩ (min ea eb)) :=
+  cmp_eq_compare_scaleTo (Int.min_le_left _ _) (Int.min_le_right _ _)
 
 end Test.Number
