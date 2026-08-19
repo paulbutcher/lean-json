@@ -28,10 +28,10 @@ that they still reach the same place whenever what comes next is not whitespace.
 -/
 
 /-- A list that whitespace cannot be taken from, which is where a `Ws` derivation has to stop. -/
-def NoWs (l : List Char) : Prop := ∀ c t, l = c :: t → isWs c = false
+@[expose] def NoWs (l : List Char) : Prop := ∀ c t, l = c :: t → isWs c = false
 
 /-- What may follow a value: the end of the text, whitespace, or a separator or closing bracket. -/
-def Follows (l : List Char) : Prop :=
+@[expose] def Follows (l : List Char) : Prop :=
   ∀ c t, l = c :: t → isWs c = true ∨ c = ',' ∨ c = ']' ∨ c = '}'
 
 theorem Ws.trans {a b c : List Char} (h₁ : Ws a b) : Ws b c → Ws a c := by

@@ -125,8 +125,8 @@ saw `"roles": ["_admin"]`.
 - **D13. `Name` and `NameMap` instances are out of scope,** their types being in the `Lean`
   namespace. `setObjVal!` is replaced by a total `setObjVal`.
 - **D14. Completeness does not gate v1.** Soundness, round tripping, and well-formedness are
-  proved for v1; the per-policy completeness theorems in section 8 are covered by the corpus
-  for v1 and proved in v2.
+  proved for v1; the per-policy completeness theorems, scoped in section 14, are covered by
+  the corpus for v1 and proved in v2.
 - **D15. Whole-buffer parsing, plus `IO.FS.Stream` helpers.** No resumable or incremental
   parser, so the parser interface stays a single call over a complete input, with `readJson`
   and `writeJson` layered on top.
@@ -252,6 +252,8 @@ Json/Parser/Soundness.lean
                          the position-to-characters bridge, leaf and machine soundness
 Json/Parser/UniqueKeys.lean
                          strict parsing returns no object with a repeated name
+Json/Parser/Completeness.lean
+                         the other direction, per section 14; the reduction and whitespace so far
 Json/Printer.lean        compress, pretty, escaping, number rendering
 Json/Printer/Soundness.lean
                          output is JSON text, output is valid UTF-8
@@ -684,8 +686,8 @@ where an exponent no generator would draw, of the kind `1e1000000000` carries, n
 
 No open questions. Work deliberately postponed:
 
-- **Completeness proofs**, per D14. Until they land, the claim "no false rejects" rests on the
-  corpus rather than on proof, and the README must say so.
+- **Completeness proofs**, per D14, scoped in section 14. Until they land, the claim "no false
+  rejects" rests on the corpus rather than on proof, and the README must say so.
 - **Nothing else in the public surface wants a doc string.** What the code already says is left
   to the code, per the commenting rule; the documentation added in Phase 10 is the part that is
   not visible from a signature.
@@ -878,9 +880,123 @@ No open questions. Work deliberately postponed:
       holds across a file rather than a line apiece restating the signatures
 
 **Post-v1**
-- [ ] Completeness theorems, per D14
+- [ ] Completeness theorems, per D14, in the order section 14 sets out. The reduction and the
+      first scanner lemma are in `Json/Parser/Completeness.lean`
 
-## 14. References
+## 14. Completeness
+
+The one substantive claim still unproved, and the last thing standing between the corpus and
+the sentence "no false rejects". What follows is the shape of the work, written before any of it
+beyond the first two lemmas in `Json/Parser/Completeness.lean`.
+
+### What is to be proved
+
+Three statements, one per duplicate-key policy, each about the permissive configuration. The
+knobs that refuse legal text are separated out below rather than carried through the induction.
+
+```lean
+-- `strict` is `permissive` with `duplicateKeys := .reject`, and `permissive` is
+-- `{ duplicateKeys := .allow, maxDepth := none, maxNumberDigits := none }`
+Spec.TextOf s j → parse s permissive = .ok j
+Spec.TextOf s j → UniqueKeys j → parse s strict = .ok j
+Spec.TextOf s j → ¬ UniqueKeys j → (parse s strict).isError
+```
+
+`maxDepth` and `maxNumberDigits` then come back as side conditions. Depth is a claim about the
+value, `Json.depth j ≤ limit`, and the parser's counter has to be tied to it. The digit limit is
+not a claim about the value at all, since `1e2` and `100` denote the same number and one is
+longer: it is a claim about the text, so it needs a predicate over the derivation rather than
+over `j`, and it is the one place where the statement gets uglier than the theorem it proves.
+
+The byte order mark needs no hypothesis in either direction. `ignoreBOM` only fires when the
+first character is `U+FEFF`, and no derivable text begins with one: whitespace cannot take it,
+and no alternative of `Value` starts with it. That is a short lemma about the head of a value,
+and it makes completeness hold for the default configuration as well as for `ignoreBOM := false`.
+
+### The reduction that shrinks it
+
+`parse_eq_of_isOk` is already proved, and it is the reason the induction never has to carry a
+value:
+
+    Spec.TextOf s j → (parse s cfg).isOk → parse s cfg = .ok j
+
+Soundness says whatever comes back is a value the text derives, and `Spec.text_unique` says the
+text derives one. So the whole remaining obligation is that a derivable text is never refused.
+Nothing has to be said about what is returned, only that something is.
+
+### What the scanners need that soundness did not
+
+Soundness relates a scanner to a derivation in the easy direction: what `skipWs` passed over,
+`Ws` derives. Completeness needs the converse, and the converse is false without maximality,
+because `Ws` relates a text to every one of its whitespace-suffixes while the scanner lands on
+exactly one. Each scanner therefore needs a second lemma, about what it *leaves*:
+
+- `noWs_skipWs`, proved: whitespace stops at a character that is not whitespace, or at the end.
+- the same for `digits`, `intPart`, `fracPart`, `expPart`: what is left starts with no digit, no
+  decimal point, no `e`.
+- the same for `string`: what is left is the closing quotation mark.
+
+With those, the leaf converses need no new arithmetic. The uniqueness lemmas inside
+`Json/Spec/Unambiguity.lean` already say that two derivations from one text with the same follow
+condition agree, so the derivation and the scanner's own soundness derivation can be compared
+directly. That is the second reduction, and it is worth as much as the first.
+
+It has a prerequisite. Most of that machinery is `private`: `NoDigit`, `NoFrac`, `NoExp`, `NoCh`,
+`digits_head`, `int_head`, `num_head`, `str_head`, and the lemmas relating `Follows` to them.
+They need to move to a module both proofs can import, `Json/Spec/Follow.lean` beside
+`Json/Spec/Length.lean`. `NoWs` and `Follows` are `@[expose]` as of this section, which is the
+smallest version of that move.
+
+### What the machine needs
+
+The mirror of `Closes`, and the same induction. `Closes` is already a relation between a stack, a
+value, and texts, so completeness reads it as a hypothesis where soundness produced it as a
+conclusion:
+
+```lean
+Spec.Value (remaining p) v t → Closes stack v t j r →
+  ∃ rp, value cfg p depth stack = .ok (j, rp) ∧ remaining rp = r
+```
+
+Positions are the bookkeeping. Soundness maps a position to text with `remaining`; completeness
+has to produce the position, which the existential above does without needing `remaining` to be
+injective.
+
+Constructing the stack is the part with no counterpart in the soundness proof. An `Arr`
+derivation gives `Elements` for the whole array, and the machine wants the first value's
+derivation and an `ElementsRest` for what follows; that is `elementsEnd_cons` run backwards, and
+it is a short induction. `Json/Spec/Length.lean` supplies the measure, since `induction` will not
+take the mutual value family apart and the same length induction that carries unambiguity
+carries this.
+
+### Order, and what each part is worth
+
+1. Extract the follow-condition machinery into `Json/Spec/Follow.lean`. Mechanical, and nothing
+   is proved twice afterwards.
+2. Maximality for each scanner. Independent of each other, and each is the size of `noWs_skipWs`.
+3. The leaf converses, through the uniqueness lemmas rather than through fresh arithmetic.
+4. The value family: `Elements` and `Members` decomposed into first-plus-rest.
+5. The machine induction, permissive configuration, `.allow`.
+6. The two `.reject` statements, which need what `Json/Parser/UniqueKeys.lean` proves about
+   `seen`, read in the other direction: a name absent from the value is absent from the set.
+7. The side conditions for `maxDepth` and `maxNumberDigits`.
+
+Steps 1 to 3 are worth landing on their own even if the rest stalls, since they are what a
+second attempt would otherwise repeat.
+
+### Risks
+
+- **The string scanner.** Escapes and surrogate pairs are where the leaf converse has the most
+  cases, and where the derivation carries an equation about code points rather than a structural
+  fact. This is the part most likely to be larger than it looks.
+- **The digit limit.** The statement, not the proof. If a predicate over the derivation reads
+  badly, the honest fallback is to prove completeness for `maxNumberDigits := none` and say in
+  the README that the default trades a class of legal texts for a bound on work, which is what
+  it does.
+- **Size.** Soundness is 893 lines and unambiguity 1036. This is of that order, and the estimate
+  is 800 to 1000 new lines plus the extraction. It is not an increment.
+
+## 15. References
 
 - RFC 8259, The JavaScript Object Notation (JSON) Data Interchange Format
 - RFC 7493, The I-JSON Message Format, which forbids duplicate names outright

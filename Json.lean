@@ -18,6 +18,7 @@ public import Json.FromTo
 public import Json.Query
 public import Json.Parser.Soundness
 public import Json.Parser.UniqueKeys
+public import Json.Parser.Completeness
 public import Json.Printer.Soundness
 public import Json.Stream
 

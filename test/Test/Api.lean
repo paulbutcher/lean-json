@@ -67,6 +67,8 @@ example := @Json.Parser.text_parse
 example := @Json.Parser.textOf_parseBytes
 example := @Json.Parser.eq_of_textOf
 example := @Json.Parser.canonicalNumbers_parse
+example := @Json.Parser.parse_eq_of_isOk
+example := @Json.Parser.skipWs_complete
 example := @Json.Parser.uniqueKeys_parse
 
 /-- The headline claim, reached through the entry point a caller actually calls. -/
