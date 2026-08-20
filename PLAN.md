@@ -146,10 +146,11 @@ saw `"roles": ["_admin"]`.
   allows 64, serde_json 128, and Jackson 1000, but all three limits exist because those parsers
   recurse on the stack. Ours does not, so for us depth is a policy and memory guard rather than
   a crash guard, and we can offer genuinely unbounded depth where they cannot.
-- **D21. `maxNumberDigits` defaults to `some 1000`,** matching Jackson's `maxNumberLength`, with
-  `none` permitted at a documented quadratic cost, since building an `Int` digit by digit is
-  O(n²). The limit applies to the significand only, the exponent being unbounded by D1. No
-  string-length limit is needed, because string handling is linear.
+- **D21. `maxNumberDigits` defaults to `some 1000`,** matching Jackson's `maxNumberLength`. It is
+  policy rather than protection: reading a run of digits and writing one back both halve the
+  number rather than working a digit at a time, so `none` costs what the digits are worth and
+  nothing more. The limit applies to the significand only, the exponent being unbounded by D1.
+  No string-length limit is needed, because string handling is linear.
 - **D22. The companion package is `deriving/` in this repository,** package `jsonDeriving`,
   module `Json.Deriving`, consumed as
   `require jsonDeriving from git "..." @ "..." / "deriving"`, which Lake supports. One
@@ -351,13 +352,15 @@ to be counted separately, and byte offsets are what a caller indexes the input w
 
 `Config` carries `duplicateKeys := .reject`, `maxDepth := some 1024`,
 `maxNumberDigits := some 1000`, and BOM handling, which ignores a leading `U+FEFF` per D18.
-Both limits accept `none`, which is safe because the parser is stack-safe by construction, and
-the quadratic cost of an unbounded significand is documented rather than hidden. Errors are
-structured, `{ byteOffset : Nat, kind : ErrorKind }`, with line and column derived on demand.
+Both limits accept `none`, which is safe because the parser is stack-safe by construction and
+because a long significand now costs no more than its digits are worth, to read and to write
+alike. Errors are structured, `{ byteOffset : Nat, kind : ErrorKind }`, with line and column
+derived on demand.
 
-Bounded-work guards: `maxNumberDigits`, because building an `Int` from a 100MB digit run is
-quadratic; `maxDepth`, as a real error rather than a crash; and a `Std.HashSet String` of the
-names seen so far, so that duplicate detection across an adversarially wide object stays linear.
+Bounded-work guards: `maxNumberDigits`, as policy rather than as protection now that the
+conversion it bounds is no longer quadratic; `maxDepth`, as a real error rather than a crash;
+and a `Std.HashSet String` of the names seen so far, so that duplicate detection across an
+adversarially wide object stays linear.
 Twenty thousand members, distinct or with one repeat planted at the end, are read in the time a
 linear scan takes.
 
@@ -431,12 +434,13 @@ value cfg p depth stack = .ok (j, rp) →
 parse s cfg = .ok j → CanonicalNumbers j
 cfg.duplicateKeys = .reject → parse s cfg = .ok j → UniqueKeys j
 
--- completeness. The first is proved, for a configuration whose limits are off; the other two
--- are steps 6 and 7 of section 14
-cfg.maxDepth = none → cfg.duplicateKeys = .allow → cfg.maxNumberDigits = none →
+-- completeness, proved but for the digit limit, which is a claim about the text rather than
+-- about the value and stays a side condition per section 14
+cfg.maxNumberDigits = none →
+  (cfg.duplicateKeys = .allow ∨ UniqueKeys j) →
+  (∀ limit, cfg.maxDepth = some limit → depth j ≤ limit) →
   Spec.TextOf s j → parse s cfg = .ok j
-Spec.TextOf s j → UniqueKeys j  → parse s strict = .ok j
-Spec.TextOf s j → ¬ UniqueKeys j → (parse s strict).isError
+cfg.duplicateKeys = .reject → Spec.TextOf s j → ¬ UniqueKeys j → ∃ e, parse s cfg = .error e
 
 -- the grammar transcription is unambiguous, which validates the spec itself. Proved
 Spec.Text bs j₁ → Spec.Text bs j₂ → j₁ = j₂
@@ -446,8 +450,8 @@ CanonicalNumbers j → Spec.TextOf (compress j) j
 CanonicalNumbers j → Spec.TextOf (pretty j indent) j
 s.toByteArray.IsValidUTF8
 
--- round trip, for both compress and pretty, from the printer's soundness and completeness.
--- Proved for a configuration whose limits are off, property-tested for the default
+-- round trip, for both compress and pretty, from the printer's soundness and completeness,
+-- under completeness's conditions; property-tested for the default reading
 CanonicalNumbers j → parse (compress j) cfg = .ok j
 CanonicalNumbers j → parse (pretty j indent) cfg = .ok j
 
@@ -688,17 +692,33 @@ worked examples that were already there, so what the theorem adds here is not de
 reach: eleven worked pairs and a hundred sampled ones, against every pair there is, which is
 where an exponent no generator would draw, of the kind `1e1000000000` carries, now falls.
 
+Completeness is the first proof here that catches a parser for refusing something rather than for
+accepting it, and the mutation that shows the difference is a parser that will not read a leading
+minus. Soundness does not notice: it says what is accepted is derivable, and a parser that
+accepts less is still sound, so `Json/Parser/Soundness.lean` compiles unchanged. The completeness
+proof fails, and so do seven tests, covering eleven corpus files between them. That count is the
+reason the claim is worth having rather than evidence that it is not: what the corpus covers is
+what someone thought to write down, and the proof covers the texts nobody did.
+
+The subquadratic conversions are the fold's problem again, one step further on. A mutation of
+`digitsFast` or of `digitCharsFast` fails the `csimp` lemma that ties it to the loop the proofs
+are stated against, and a mutation of either loop fails those proofs, so both directions are
+covered. What nothing catches is deleting a `csimp` lemma outright: everything still compiles and
+every test still passes, and only the timing changes. That is what the long-number row in the
+benchmark is for, and it is tracking rather than a gate.
+
 ## 12. Deferred
 
 No open questions. Work deliberately postponed:
 
-- **Completeness proofs**, per D14, scoped in section 14. Until they land, the claim "no false
-  rejects" rests on the corpus rather than on proof, and the README must say so.
+- **The two limits as side conditions on completeness**, per section 14 step 7. Completeness is
+  proved for a reading whose limits are off, whether or not it refuses repeated names. Tying the
+  parser's depth counter to `Json.depth` is the tractable half; the digit limit is a claim about
+  the text rather than about the value, since `1e2` and `100` denote the same number and one is
+  longer, so it needs a predicate over the derivation.
 - **Nothing else in the public surface wants a doc string.** What the code already says is left
   to the code, per the commenting rule; the documentation added in Phase 10 is the part that is
   not visible from a signature.
-- **Subquadratic digit conversion.** A divide-and-conquer `Int`-from-digits conversion would
-  let `maxNumberDigits := none` be the default rather than a documented hazard, retiring D21.
 - **A generated codec that does not recurse.** The handlers the companion writes walk a value as
   a recursion rather than through a work list. Deferred on the measurement under constraint 4:
   three million deep encodes and decodes, and memory is what gives out first, so what a machine
@@ -810,9 +830,9 @@ No open questions. Work deliberately postponed:
 - [x] 34 behavioural tests: number rendering by branch, escaping, layout for both forms, a
       100,000 deep value printed without a crash, and three round-trip properties, each
       confirmed by a mutation that ought to fail it
-- [ ] Round tripping stays a property rather than a theorem, since `parse (render j) = .ok j`
-      needs parser completeness, which is deferred per D14. Well-formedness is the half that
-      does not depend on it
+- [x] Round tripping, once completeness landed: `parse_compress` and `parse_pretty` in
+      `Json/RoundTrip.lean`, for a reading that refuses nothing the grammar accepts. What is
+      left to a property is the default reading, whose limits refuse some legal text by design
 
 **Phase 6. Codecs**
 - [x] `ToJson` / `FromJson` in the `Json` namespace, per D24, with instances for `Json`,
@@ -889,26 +909,33 @@ No open questions. Work deliberately postponed:
 - [x] Completeness for the permissive configuration, in the order section 14 sets out: the
       follow-condition module, scanner maximality, the leaf converses, the value family split
       into first and rest, the machine, and the entry point. The round trip follows from it
-- [ ] Completeness for the two duplicate-key statements, and the two limits as side conditions,
-      which are steps 6 and 7 of section 14
+- [x] Completeness for the two duplicate-key statements, and for the nesting limit as a side
+      condition, which are step 6 and half of step 7 of section 14
+- [ ] The digit limit as a side condition, the other half of step 7, which needs a predicate
+      over the derivation rather than over the value
+- [x] Subquadratic digit conversion, reading and writing alike, so that a long significand
+      costs what its digits are worth. `maxNumberDigits` is now policy rather than protection
 
 ## 14. Completeness
 
-No text the grammar derives is refused. Proved for the permissive configuration; the two
-duplicate-key statements and the two limits are what remains, and are set out at the end.
+No text the grammar derives is refused. Proved but for the limit on significand digits, which is
+a claim about the text rather than about the value and is set out at the end.
 
 ### What is proved
 
 ```lean
 -- `Json/Parser/Completeness.lean`
-cfg.maxDepth = none → cfg.duplicateKeys = .allow → cfg.maxNumberDigits = none →
+cfg.maxNumberDigits = none →
+  (cfg.duplicateKeys = .allow ∨ UniqueKeys j) →
+  (∀ limit, cfg.maxDepth = some limit → Json.depth j ≤ limit) →
   Spec.TextOf s j → parse s cfg = .ok j
+cfg.duplicateKeys = .reject → Spec.TextOf s j → ¬ UniqueKeys j → ∃ e, parse s cfg = .error e
 ```
 
-The three hypotheses are the knobs that refuse legal text by design, and nothing else is
-assumed: in particular the byte order mark needs no hypothesis in either direction, because no
-derivable text begins with one. That is `head_ne_bom`, and it is why the theorem holds with
-`ignoreBOM` at its default.
+The hypotheses are the three things that can make a reading refuse text the grammar accepts, and
+nothing else is assumed: in particular the byte order mark needs no hypothesis in either
+direction, because no derivable text begins with one. That is `head_ne_bom`, and it is why the
+theorem holds with `ignoreBOM` at its default.
 
 `Json/RoundTrip.lean` composes it with the printer's soundness, which retires a property:
 
@@ -964,6 +991,11 @@ down before `num_unique` applies, and at the top of the stack nothing else suppl
 `elementsRest_follows` and `membersRest_follows` supply it everywhere else, since what follows a
 value inside a container is a separator or a closing bracket.
 
+Three invariants ride alongside, one per thing that can make a reading refuse: the frame's set of
+names seen holds nothing the frame will not hold, the depth counter is the length of the stack,
+and the check on repeated names is discharged either because they are allowed or because the
+value the parse returns has none.
+
 Two other things carried the proof. The parser dispatches on one character, so each branch of
 `value`, `continueWith` and `member` is unfolded once, in a lemma of its own, and the induction is
 then driven by the derivation rather than by the parser. And `Elements` and `Members` come apart
@@ -972,17 +1004,20 @@ the mutual value family apart.
 
 ### What remains
 
-6. The two `.reject` statements. `Json/Parser/UniqueKeys.lean` proves that the frame's `seen`
-   set holds every name in the frame's fields; completeness needs the converse, that it holds
-   nothing else, and needs the final value's distinct names carried back down the `Closes` chain
-   to the object being built. Both are invariants threaded through all three of the machine's
-   predicates, so this is of the same order as the machine itself.
-7. The two limits as side conditions. Depth is a claim about the value, `Json.depth j ≤ limit`,
-   and the parser's counter has to be tied to it. The digit limit is not a claim about the value
-   at all, since `1e2` and `100` denote the same number and one is longer: it is a claim about
-   the text, so it needs a predicate over the derivation. If that reads badly the honest fallback
-   is to leave it where it is and say in the README that the default trades a class of legal
-   texts for a bound on work, which is what it does.
+Steps 6 and 7 landed but for one half of the last. Refusing a repeated name is covered in both
+directions: the machine carries the invariant that a frame's set of names seen holds nothing the
+frame will not hold, the object under construction inherits its distinct names from the value the
+whole parse returns by way of `Closes`, and a text whose value repeats a name is refused rather
+than misread, which follows from what `Json/Parser/UniqueKeys.lean` already proves. The nesting
+limit is covered because the parser's depth counter is the length of its stack, and `Closes`
+bounds that by the depth of the value returned.
+
+What is left is the digit limit, and it is the statement rather than the proof. `1e2` and `100`
+denote the same number and one is longer, so a bound on digits is a claim about the text and not
+about the value, and stating it needs a predicate over the derivation. It matters less than it
+did: the conversion it bounds is no longer quadratic in either direction, so the limit is policy
+rather than protection, and a reading with `maxNumberDigits := none` is now both safe and covered
+by proof.
 
 ## 15. References
 

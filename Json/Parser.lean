@@ -44,8 +44,8 @@ structure Config where
   -/
   maxDepth : Option Nat := some 1024
   /--
-  A limit on the digits of a significand or an exponent. `none` is permitted, at the cost of a
-  quadratic conversion, since a mantissa is built a digit at a time.
+  A limit on the digits of a significand or an exponent. `none` costs no more than the digits
+  are worth: both reading and writing a long one halve rather than working a digit at a time.
   -/
   maxNumberDigits : Option Nat := some 1000
   /-- RFC 8259 permits ignoring a leading `U+FEFF` in text that was not networked. -/
@@ -362,6 +362,146 @@ where
     | none => ⟨(value, count), p, h⟩
   termination_by p.remainingBytes
   decreasing_by exact step?_lt hc
+
+/-!
+Reading `d₀d₁…dₙ` as `((d₀ * 10 + d₁) * 10 + …)` multiplies an ever longer number by a short one,
+which costs a time quadratic in the digits and is why a limit on them was ever needed. Halving
+instead keeps the two sides of each multiplication the same length, which is what
+arbitrary-precision multiplication is fast at. The loop above is the one the proofs are stated
+against, and the two are proved equal, so what runs is the halving one.
+-/
+
+/-- A run of digits, as the number it denotes and how many there are. -/
+def digitJoin (a b : Nat × Nat) : Nat × Nat := (a.1 * 10 ^ b.2 + b.1, a.2 + b.2)
+
+def digitStep (a : Nat × Nat) (d : Nat) : Nat × Nat := (a.1 * 10 + d, a.2 + 1)
+
+private theorem digitJoin_assoc (a b c : Nat × Nat) :
+    digitJoin (digitJoin a b) c = digitJoin a (digitJoin b c) := by
+  simp only [digitJoin, Prod.mk.injEq]
+  refine ⟨?_, by omega⟩
+  rw [Nat.add_mul, Nat.mul_assoc, ← Nat.pow_add, Nat.add_assoc]
+
+private theorem digitStep_eq (a : Nat × Nat) (d : Nat) : digitStep a d = digitJoin a (d, 1) := by
+  simp [digitStep, digitJoin]
+
+private theorem foldl_digitStep (ds : List Nat) (a : Nat × Nat) :
+    ds.foldl digitStep a = digitJoin a (ds.foldl digitStep (0, 0)) := by
+  induction ds generalizing a with
+  | nil => simp [digitJoin]
+  | cons d rest ih =>
+    rw [List.foldl_cons, List.foldl_cons, ih, ih (digitStep (0, 0) d), digitStep_eq,
+      digitStep_eq, ← digitJoin_assoc]
+    simp [digitJoin]
+
+def fromDigits : List Nat → Nat × Nat
+  | [] => (0, 0)
+  | [d] => (d, 1)
+  | d₁ :: d₂ :: rest =>
+    let ds := d₁ :: d₂ :: rest
+    digitJoin (fromDigits (ds.take (ds.length / 2))) (fromDigits (ds.drop (ds.length / 2)))
+termination_by ds => ds.length
+decreasing_by
+  · simp only [List.length_take, List.length_cons]
+    omega
+  · simp only [List.length_drop, List.length_cons]
+    omega
+
+private theorem fromDigits_eq (ds : List Nat) : fromDigits ds = ds.foldl digitStep (0, 0) := by
+  fun_induction fromDigits ds with
+  | case1 => simp
+  | case2 d => simp [digitStep]
+  | case3 _ _ _ l ih₁ ih₂ =>
+    rw [ih₁, ih₂, ← foldl_digitStep, ← List.foldl_append, List.take_append_drop]
+
+/-- The same run of digits, kept as a list, most recently read first. -/
+def digitList (start p : s.Pos) (acc : List Nat)
+    (h : p.remainingBytes ≤ start.remainingBytes) : Consumed (List Nat) start :=
+  match hc : step? p with
+  | some (c, q) =>
+    if Spec.isDigit c then
+      digitList start q (Spec.digitVal c :: acc) (by have := step?_lt hc; omega)
+    else
+      ⟨acc, p, h⟩
+  | none => ⟨acc, p, h⟩
+termination_by p.remainingBytes
+decreasing_by exact step?_lt hc
+
+def digitsFast (start : s.Pos) (value count : Nat) : Consumed (Nat × Nat) start :=
+  match digitList start start [] (Nat.le_refl _) with
+  | ⟨ds, pos, h⟩ => ⟨digitJoin (value, count) (fromDigits ds.reverse), pos, h⟩
+
+private theorem digits_go_step {start p q : s.Pos} {c : Char} (hc : step? p = some (c, q))
+    (hd : Spec.isDigit c = true) (v n : Nat) (h : p.remainingBytes ≤ start.remainingBytes)
+    (h' : q.remainingBytes ≤ start.remainingBytes) :
+    digits.go start p v n h = digits.go start q (v * 10 + Spec.digitVal c) (n + 1) h' := by
+  rw [digits.go]
+  split
+  · next c' q' hc' =>
+    rw [hc] at hc'
+    injection hc' with hc''
+    injection hc'' with h₁ h₂
+    subst h₁
+    subst h₂
+    rw [if_pos hd]
+  · next hc' => rw [hc] at hc'; exact absurd hc' (by simp)
+
+private theorem digits_go_stop {start p : s.Pos} (v n : Nat)
+    (h : p.remainingBytes ≤ start.remainingBytes)
+    (hstop : ∀ c q, step? p = some (c, q) → Spec.isDigit c = false) :
+    digits.go start p v n h = ⟨(v, n), p, h⟩ := by
+  rw [digits.go]
+  split
+  · next c' q' hc' => rw [if_neg (by simp [hstop c' q' hc'])]
+  · rfl
+
+private theorem digits_go_eq (start : s.Pos) (v c : Nat) :
+    ∀ (p : s.Pos) (acc : List Nat) (h : p.remainingBytes ≤ start.remainingBytes),
+      digits.go start p (digitJoin (v, c) (fromDigits acc.reverse)).1
+          (digitJoin (v, c) (fromDigits acc.reverse)).2 h
+        = ⟨digitJoin (v, c) (fromDigits (digitList start p acc h).value.reverse),
+           (digitList start p acc h).pos, (digitList start p acc h).notLonger⟩ := by
+  intro p acc h
+  fun_induction digitList start p acc h with
+  | case1 p acc h c' q hc hd ih =>
+    have hkey : digitJoin (v, c) (fromDigits (Spec.digitVal c' :: acc).reverse)
+        = digitStep (digitJoin (v, c) (fromDigits acc.reverse)) (Spec.digitVal c') := by
+      rw [List.reverse_cons, fromDigits_eq, List.foldl_append, List.foldl_cons, List.foldl_nil,
+        ← fromDigits_eq, digitStep_eq, digitStep_eq, digitJoin_assoc]
+    rw [digits_go_step hc hd _ _ (by have := step?_lt hc; omega),
+      show (digitJoin (v, c) (fromDigits acc.reverse)).1 * 10 + Spec.digitVal c'
+          = (digitJoin (v, c) (fromDigits (Spec.digitVal c' :: acc).reverse)).1 from by
+        rw [hkey]; simp [digitStep],
+      show (digitJoin (v, c) (fromDigits acc.reverse)).2 + 1
+          = (digitJoin (v, c) (fromDigits (Spec.digitVal c' :: acc).reverse)).2 from by
+        rw [hkey]; simp [digitStep]]
+    exact ih
+  | case2 p acc h c' q hc hd =>
+    refine digits_go_stop _ _ h ?_
+    intro c₂ q₂ hcq
+    rw [hc] at hcq
+    injection hcq with hcq'
+    injection hcq' with hcc _
+    rw [← hcc]
+    simpa using hd
+  | case3 p acc h hc =>
+    refine digits_go_stop _ _ h ?_
+    intro c₂ q₂ hcq
+    rw [hc] at hcq
+    exact absurd hcq (by simp)
+
+theorem digitsFast_eq (start : s.Pos) (value count : Nat) :
+    digitsFast start value count = digits start value count := by
+  have hgo := digits_go_eq start value count start [] (Nat.le_refl _)
+  rw [show digitJoin (value, count) (fromDigits ([] : List Nat).reverse) = (value, count) from by
+    simp [digitJoin, fromDigits]] at hgo
+  rw [digits, digitsFast]
+  exact hgo.symm
+
+@[csimp] theorem digits_eq_digitsFast : @digits = @digitsFast := by
+  funext s start value count
+  exact (digitsFast_eq start value count).symm
+
 
 /-- `int = zero / ( digit1-9 *DIGIT )`. A leading zero stands alone, so `01` is two tokens. -/
 def intPart (p : s.Pos) : Except Error (Scanned (Nat × Nat) p) :=

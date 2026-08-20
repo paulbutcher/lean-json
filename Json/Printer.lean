@@ -40,6 +40,165 @@ decreasing_by omega
 
 def digitChars (n : Nat) : List Char := digitCharsTo n []
 
+/-!
+Dividing a number by ten to take off its last digit costs a pass over the whole number, so
+writing one out a digit at a time is quadratic in its digits. Splitting it in half instead, by
+dividing by a power of ten near the middle, keeps both sides of each division the same size,
+which is what arbitrary-precision division is fast at. The loop above is the one the grammar
+theorems are stated against, and the two are proved equal, so what runs is the halving one.
+-/
+
+/-- The last `w` decimal digits of `n`, most significant first, leading zeros included. -/
+private def padDigits (n : Nat) : Nat → List Char
+  | 0 => []
+  | w + 1 => padDigits (n / 10) w ++ [digitChar (n % 10)]
+
+private theorem padDigits_split (n a : Nat) :
+    ∀ b, padDigits n (a + b) = padDigits (n / 10 ^ b) a ++ padDigits n b := by
+  intro b
+  induction b generalizing n with
+  | zero => simp [padDigits]
+  | succ b ih =>
+    rw [show a + (b + 1) = (a + b) + 1 by omega, padDigits, ih (n / 10),
+      Nat.div_div_eq_div_mul, Nat.mul_comm 10 (10 ^ b), ← Nat.pow_succ, padDigits,
+      List.append_assoc]
+
+private theorem padDigits_congr : ∀ (w n₁ n₂ : Nat), n₁ % 10 ^ w = n₂ % 10 ^ w →
+    padDigits n₁ w = padDigits n₂ w := by
+  intro w
+  induction w with
+  | zero => intro n₁ n₂ _; simp [padDigits]
+  | succ w ih =>
+    intro n₁ n₂ h
+    rw [show (10 : Nat) ^ (w + 1) = 10 * 10 ^ w by rw [Nat.pow_succ]; omega] at h
+    have hlow : n₁ % 10 = n₂ % 10 := by
+      rw [← Nat.mod_mul_right_mod n₁ 10 (10 ^ w), ← Nat.mod_mul_right_mod n₂ 10 (10 ^ w), h]
+    have hhigh : n₁ / 10 % 10 ^ w = n₂ / 10 % 10 ^ w := by
+      rw [← Nat.mod_mul_right_div_self n₁ 10 (10 ^ w), ← Nat.mod_mul_right_div_self n₂ 10 (10 ^ w),
+        h]
+    rw [padDigits, padDigits, ih _ _ hhigh, hlow]
+
+private theorem padDigits_zero (w : Nat) : padDigits 0 w = List.replicate w '0' := by
+  induction w with
+  | zero => simp [padDigits]
+  | succ w ih => simp [padDigits, ih, List.replicate_succ', digitChar]
+
+/-- The last `w` digits of `n` in front of `acc`, by halving rather than a digit at a time. -/
+def renderExact (n : Nat) : Nat → List Char → List Char
+  | 0, acc => acc
+  | 1, acc => digitChar (n % 10) :: acc
+  | w + 2, acc =>
+    let h := (w + 2) / 2
+    renderExact (n / 10 ^ h) (w + 2 - h) (renderExact (n % 10 ^ h) h acc)
+termination_by w => w
+decreasing_by
+  · omega
+  · omega
+
+private theorem renderExact_eq (n w : Nat) (acc : List Char) :
+    renderExact n w acc = padDigits n w ++ acc := by
+  fun_induction renderExact n w acc with
+  | case1 => simp [padDigits]
+  | case2 n acc => simp [padDigits]
+  | case3 n w acc h _ ihLow ihHigh =>
+    rw [ihHigh, ihLow, padDigits_congr h (n % 10 ^ h) n (by simp [Nat.mod_mod_of_dvd]),
+      ← List.append_assoc, ← padDigits_split n (w + 2 - h) h]
+    congr 2
+    omega
+
+private theorem dropWhile_replicate_append (w : Nat) (Y : List Char) :
+    (List.replicate w '0' ++ Y).dropWhile (· == '0') = Y.dropWhile (· == '0') := by
+  induction w with
+  | zero => simp
+  | succ w ih => simp [List.replicate_succ, ih]
+
+private theorem dropWhile_append_of_ne_nil {p : Char → Bool} {X Y : List Char}
+    (h : X.dropWhile p ≠ []) : (X ++ Y).dropWhile p = X.dropWhile p ++ Y := by
+  induction X with
+  | nil => simp at h
+  | cons c t ih =>
+    simp only [List.cons_append, List.dropWhile_cons] at h ⊢
+    split
+    · exact ih (by simpa [*] using h)
+    · rfl
+
+private theorem digitChar_ne_zero {d : Nat} (h : d ≠ 0) (h' : d < 10) : digitChar d ≠ '0' := by
+  have : d = 1 ∨ d = 2 ∨ d = 3 ∨ d = 4 ∨ d = 5 ∨ d = 6 ∨ d = 7 ∨ d = 8 ∨ d = 9 := by omega
+  rcases this with rfl|rfl|rfl|rfl|rfl|rfl|rfl|rfl|rfl <;> decide
+
+private theorem digitCharsTo_nil (n : Nat) : ∀ acc, digitCharsTo n acc = digitChars n ++ acc := by
+  induction n using Nat.strongRecOn with
+  | ind n ih =>
+    intro acc
+    rw [digitChars]
+    by_cases hn : n < 10
+    · rw [digitCharsTo, if_pos hn, digitCharsTo, if_pos hn]
+      simp
+    · rw [digitCharsTo, if_neg hn, ih (n / 10) (by omega) (digitChar (n % 10) :: acc),
+        digitCharsTo, if_neg hn, ih (n / 10) (by omega) [digitChar (n % 10)]]
+      simp
+
+private theorem digitChars_cons (n : Nat) (h : ¬ n < 10) :
+    digitChars n = digitChars (n / 10) ++ [digitChar (n % 10)] := by
+  rw [digitChars, digitCharsTo, if_neg h, digitCharsTo_nil]
+
+private theorem digitChars_ne_nil (n : Nat) : digitChars n ≠ [] := by
+  by_cases hn : n < 10
+  · rw [digitChars, digitCharsTo, if_pos hn]; simp
+  · rw [digitChars_cons n hn]; simp
+
+private theorem dropWhile_padDigits : ∀ (w n : Nat), n ≠ 0 → n < 10 ^ w →
+    (padDigits n w).dropWhile (· == '0') = digitChars n := by
+  intro w
+  induction w with
+  | zero => intro n hn h; simp at h; omega
+  | succ w ih =>
+    intro n hn h
+    have hlt : n / 10 < 10 ^ w := by
+      rw [Nat.div_lt_iff_lt_mul (by omega), ← Nat.pow_succ]
+      exact h
+    rw [padDigits]
+    by_cases h10 : n < 10
+    · rw [show n / 10 = 0 by omega, padDigits_zero, dropWhile_replicate_append,
+        show n % 10 = n by omega, digitChars, digitCharsTo, if_pos h10]
+      simp [digitChar_ne_zero hn h10]
+    · have hne : n / 10 ≠ 0 := by omega
+      rw [dropWhile_append_of_ne_nil (by rw [ih (n / 10) hne hlt]; exact digitChars_ne_nil _),
+        ih (n / 10) hne hlt, ← digitChars_cons n h10]
+
+/-- A power of two at least as large as the number of digits, found by squaring. -/
+def widthBound (n : Nat) : Nat := go 1 10 (by omega)
+where
+  go (w p : Nat) (hp : 2 ≤ p) : Nat :=
+    if n < p then w
+    else go (2 * w) (p * p) (by have := Nat.mul_le_mul_left p hp; omega)
+  termination_by n + 1 - p
+  decreasing_by
+    have := Nat.mul_le_mul_left p hp
+    omega
+
+private theorem widthBound_go_spec (n : Nat) : ∀ (w p : Nat) (hp : 2 ≤ p), p = 10 ^ w → 1 ≤ w →
+    n < 10 ^ (widthBound.go n w p hp) ∧ 1 ≤ widthBound.go n w p hp := by
+  intro w p hp
+  fun_induction widthBound.go n w p hp with
+  | case1 w p hp h => intro hpw hw; exact ⟨hpw ▸ h, hw⟩
+  | case2 w p hp h ih =>
+    intro hpw hw
+    exact ih (by rw [hpw, ← Nat.pow_add]; congr 1; omega) (by omega)
+
+private theorem widthBound_spec (n : Nat) : n < 10 ^ widthBound n :=
+  (widthBound_go_spec n 1 10 (by omega) (Nat.pow_one 10).symm (by omega)).1
+
+def digitCharsFast (n : Nat) : List Char :=
+  if n = 0 then ['0'] else (renderExact n (widthBound n) []).dropWhile (· == '0')
+
+@[csimp] theorem digitChars_eq_digitCharsFast : @digitChars = @digitCharsFast := by
+  funext n
+  rw [digitCharsFast]
+  split
+  · next h => rw [h, digitChars, digitCharsTo, if_pos (by omega)]; rfl
+  · next h => rw [renderExact_eq, List.append_nil, dropWhile_padDigits _ n h (widthBound_spec n)]
+
 def digitString (n : Nat) : String := String.ofList (digitChars n)
 
 def zeros (n : Nat) : String := String.ofList (List.replicate n '0')

@@ -87,6 +87,10 @@ private def records (n : Nat) : String :=
 
 private def nested (n : Nat) : String := "".pushn '[' n ++ "1" ++ "".pushn ']' n
 
+-- One number with a very long significand, which is where reading and writing a digit at a time
+-- would each be quadratic. The limit is lifted, since the point is what the conversion costs.
+private def longNumber (n : Nat) : String := "".pushn '7' n
+
 /-! ## Codecs
 
 Encoding and decoding are timed apart from the text, because a derived instance can do work that
@@ -201,7 +205,8 @@ def main : IO Unit := do
     { name := "strings", text := strings 20000 },
     { name := "records", text := records 20000 },
     -- Past the default depth limit, so this one lifts it.
-    { name := "nesting", text := nested 20000, cfg := { maxDepth := none }, layout := false }
+    { name := "nesting", text := nested 20000, cfg := { maxDepth := none }, layout := false },
+    { name := "long number", text := longNumber 200000, cfg := { maxNumberDigits := none } }
   ]
   amplification "a long string" longString
   amplification "records" (records 100000)

@@ -103,7 +103,7 @@ Reading is strict by default. `Json.Config` relaxes any of it.
 |---|---|---|
 | `duplicateKeys` | `.reject` | see below |
 | `maxDepth` | `some 1024` | policy, not a crash guard: `none` is safe here |
-| `maxNumberDigits` | `some 1000` | building an integer from a digit run is quadratic |
+| `maxNumberDigits` | `some 1000` | policy, matching Jackson: `none` is safe here too |
 | `ignoreBOM` | `true` | RFC 8259 permits ignoring a leading `U+FEFF` |
 
 **Duplicate names are refused by default.** RFC 8259 leaves the outcome to the implementation,
@@ -134,13 +134,16 @@ Proved:
   and the same for `pretty`. The work-stack traversal that runs is proved equal to a structural
   description of the same text, and the grammar theorems are proved about that.
 - Whatever the grammar derives, the parser reads, and reads as the value the grammar gives it:
-  `Spec.TextOf s j → parse s cfg = .ok j`, for a configuration whose limits on nesting, on
-  digits and on repeated names are off, those being the three things that refuse legal text by
-  design. No hypothesis about the byte order mark is needed in either direction, since no text
-  of the grammar begins with one.
+  `Spec.TextOf s j → parse s cfg = .ok j`. Three things can make a reading refuse text the
+  grammar accepts, and each is a hypothesis rather than an assumption: the limit on significand
+  digits must be off, the value must be within the limit on nesting, and either repeated names
+  are allowed or the value has none. Under the strict default the other half holds too: a text
+  whose value repeats a name is refused rather than read as something else. No hypothesis about
+  the byte order mark is needed in either direction, since no text of the grammar begins with
+  one.
 - Reading what was written gives back what was written, for both forms:
   `CanonicalNumbers j → parse (compress j) cfg = .ok j`, and the same for `pretty`. That is the
-  two soundness halves and completeness composed, under the same configuration.
+  two soundness halves and completeness composed, under the same three conditions.
 - Output is always valid UTF-8, by construction, since it is a `String`.
 - Every walk of a whole value agrees with one that keeps its pending work in a list rather than
   on the stack, and it is the second that runs: `Alg.fold_eq_run`, with `beq`, `hash`,
@@ -172,14 +175,15 @@ code they describe.
 
 Not proved, and covered by tests instead:
 
-- **Completeness under the strict default.** What is proved covers the configuration whose
-  limits are off. Reading that refuses a repeated name is a restriction of the grammar rather
-  than a defect, but that it refuses nothing else is not yet proved, and neither are the limits
-  on nesting and on digits. That is where 318 files of the JSONTestSuite conformance corpus, two
-  3,000 round fuzz sweeps and the behavioural tests earn their keep.
-- **Round tripping through text under the strict default**, for the same reason. `Float` is the
-  one codec whose round trip is a property rather than a theorem, since it goes through the
-  exact decimal expansion of a bit pattern.
+- **Completeness under a limit on significand digits.** The other two conditions above are
+  discharged by a hypothesis about the value; this one is not, because it is a claim about the
+  text rather than about the value: `1e2` and `100` denote the same number and one is longer. So
+  a reading with `maxNumberDigits` set has no proof that it refuses nothing else, and that is
+  where 318 files of the JSONTestSuite conformance corpus, two 3,000 round fuzz sweeps and the
+  behavioural tests earn their keep.
+- **Round tripping through text under that same limit**, for the same reason. `Float` is the one
+  codec whose round trip is a property rather than a theorem, since it goes through the exact
+  decimal expansion of a bit pattern.
 - **Absence of stack overflow and out-of-memory.** No theorem says a program will not run out of
   either. What is proved is that what runs is the traversal holding its work in a list; that this
   costs heap rather than stack is by construction, and evidenced by fuzzing. Two recursions sit

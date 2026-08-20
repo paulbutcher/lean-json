@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import Json.Parser.Soundness
+public import Json.Parser.UniqueKeys
 public import Json.Spec.Follow
 public import Json.Spec.Unambiguity
 
@@ -935,6 +936,162 @@ private theorem membersRest_follows {t : List Char} {ms : List (String × Json)}
   | more hsep _ _ => exact Spec.follows_of_token hsep (.inl rfl)
 
 /-!
+Refusing a repeated name is the one thing the machine does that the grammar does not ask for, so
+completeness for the strict reading has to show that the refusal never fires on a value whose
+names are distinct. Two halves: what the frame's set holds is among the names the frame will
+hold, which is an invariant of the machine, and the object under construction inherits its
+distinct names from the value the whole parse returns, which is what `Closes` carries.
+-/
+
+private theorem uniqueKeysList_mem : ∀ {l : List Json}, uniqueKeysList l = true →
+    ∀ {v : Json}, v ∈ l → UniqueKeys v := by
+  intro l
+  induction l with
+  | nil => intro _ v hv; exact absurd hv (by simp)
+  | cons _ _ ih =>
+    intro h v hv
+    rw [uniqueKeysList, Bool.and_eq_true] at h
+    rcases List.mem_cons.mp hv with rfl | hv
+    · exact h.1
+    · exact ih h.2 hv
+
+private theorem uniqueKeysFields_mem : ∀ {l : List (String × Json)}, uniqueKeysFields l = true →
+    ∀ {m : String × Json}, m ∈ l → UniqueKeys m.2 := by
+  intro l
+  induction l with
+  | nil => intro _ m hm; exact absurd hm (by simp)
+  | cons a _ ih =>
+    intro h m hm
+    obtain ⟨_, _⟩ := a
+    rw [uniqueKeysFields, Bool.and_eq_true] at h
+    rcases List.mem_cons.mp hm with rfl | hm
+    · exact h.1
+    · exact ih h.2 hm
+
+/-- Every value the frames still hold is a part of the value the parse returns. -/
+private theorem closes_uniqueKeys : ∀ (stack : List Frame) {v : Json} {t : List Char} {j : Json}
+    {r : List Char}, Closes stack v t j r → UniqueKeys j → UniqueKeys v := by
+  intro stack
+  induction stack with
+  | nil =>
+    intro v t j r h hj
+    simp only [Closes] at h
+    obtain ⟨rfl, -⟩ := h
+    exact hj
+  | cons f outer ih =>
+    intro v t j r h hj
+    cases f with
+    | arr elems =>
+      simp only [Closes] at h
+      obtain ⟨vs, t', -, h'⟩ := h
+      have hu := ih h' hj
+      rw [UniqueKeys, uniqueKeys] at hu
+      exact uniqueKeysList_mem hu (by simp)
+    | obj fields seen name =>
+      simp only [Closes] at h
+      obtain ⟨ms, t', -, h'⟩ := h
+      have hu := ih h' hj
+      rw [UniqueKeys, uniqueKeys, Bool.and_eq_true] at hu
+      exact uniqueKeysFields_mem hu.2 (m := (name, v)) (by simp)
+
+/-- A name still to be read is not one of the names already read into the same object. -/
+private theorem name_not_read {fields : Array (String × Json)} {m : String × Json}
+    {ms : List (String × Json)} (h : UniqueKeys (.obj (fields ++ (m :: ms).toArray))) :
+    m.1 ∉ fieldNames fields := by
+  rw [UniqueKeys, uniqueKeys, Bool.and_eq_true, distinctNames_iff] at h
+  have hd := h.1
+  rw [show fieldNames (fields ++ (m :: ms).toArray)
+        = fieldNames fields ++ (m.1 :: ms.map (·.1)) by simp [fieldNames],
+    List.nodup_append] at hd
+  intro hm
+  exact hd.2.2 m.1 hm m.1 (by simp) rfl
+
+/-- What an object frame's set of names seen may hold: nothing the frame will not. -/
+private def SeenOk (names : List String) (seen : Std.HashSet String) : Prop :=
+  ∀ nm, seen.contains nm = true → nm ∈ names
+
+private def FrameSeenOk : Frame → Prop
+  | .arr _ => True
+  | .obj fields seen name => SeenOk (fieldNames fields ++ [name]) seen
+
+private def StackSeenOk (stack : List Frame) : Prop := ∀ f ∈ stack, FrameSeenOk f
+
+/-!
+The parser's depth counter is the number of frames it is holding, and a frame is a container the
+value it returns nests inside, so the counter never exceeds the depth of that value. A limit on
+nesting therefore refuses nothing whose depth is within it.
+-/
+
+private theorem closes_depth : ∀ (stack : List Frame) {v : Json} {t : List Char} {j : Json}
+    {r : List Char}, Closes stack v t j r → stack.length + Json.depth v ≤ Json.depth j := by
+  intro stack
+  induction stack with
+  | nil =>
+    intro v t j r h
+    simp only [Closes] at h
+    obtain ⟨rfl, -⟩ := h
+    simp
+  | cons f outer ih =>
+    intro v t j r h
+    cases f with
+    | arr elems =>
+      simp only [Closes] at h
+      obtain ⟨vs, t', -, h'⟩ := h
+      have hlt : Json.depth v < Json.depth (.arr (elems.push v ++ vs.toArray)) :=
+        Json.depth_arr_lt (by simp)
+      have := ih h'
+      simp only [List.length_cons]
+      omega
+    | obj fields seen name =>
+      simp only [Closes] at h
+      obtain ⟨ms, t', -, h'⟩ := h
+      have hlt : Json.depth v < Json.depth (.obj (fields.push (name, v) ++ ms.toArray)) :=
+        Json.depth_obj_lt (k := name) (by simp)
+      have := ih h'
+      simp only [List.length_cons]
+      omega
+
+private theorem depthExceeded_false {cfg : Config} {depth : Nat} {stack : List Frame}
+    {v j : Json} {t r : List Char} (hlen : depth = stack.length) (hcl : Closes stack v t j r)
+    (hfit : ∀ limit, cfg.maxDepth = some limit → Json.depth j ≤ limit) (hv : 1 ≤ Json.depth v) :
+    depthExceeded cfg depth = false := by
+  rw [depthExceeded]
+  split
+  · next limit hlim =>
+    have := closes_depth stack hcl
+    have := hfit limit hlim
+    simp only [decide_eq_false_iff_not, Nat.not_le]
+    omega
+  · rfl
+
+private theorem stackSeenOk_cons {f : Frame} {stack : List Frame} (hf : FrameSeenOk f)
+    (hs : StackSeenOk stack) : StackSeenOk (f :: stack) := by
+  intro g hg
+  rcases List.mem_cons.mp hg with rfl | hg
+  · exact hf
+  · exact hs g hg
+
+private theorem stackSeenOk_tail {f : Frame} {stack : List Frame}
+    (hs : StackSeenOk (f :: stack)) : StackSeenOk stack :=
+  fun g hg => hs g (List.mem_cons_of_mem _ hg)
+
+private theorem stackSeenOk_head {f : Frame} {stack : List Frame}
+    (hs : StackSeenOk (f :: stack)) : FrameSeenOk f := hs f List.mem_cons_self
+
+private theorem seenOk_empty {names : List String} : SeenOk names (∅ : Std.HashSet String) := by
+  intro nm h
+  simp at h
+
+private theorem seenOk_insert {names : List String} {seen : Std.HashSet String} {name : String}
+    (h : SeenOk names seen) : SeenOk (names ++ [name]) (seen.insert name) := by
+  intro nm hnm
+  rw [Std.HashSet.contains_insert, Bool.or_eq_true] at hnm
+  rcases hnm with hnm | hnm
+  · rw [eq_of_beq hnm]
+    simp
+  · exact List.mem_append_left _ (h nm hnm)
+
+/-!
 The machine, in the direction soundness does not go. What a derivation leaves is what the parser
 leaves up to whitespace, since a token in the grammar carries the whitespace after it while the
 scanner passes over that only when it next looks, so the conclusions are stated with `Ws` rather
@@ -944,12 +1101,16 @@ than with equality.
 private def ValueComplete (cfg : Config) (p : s.Pos) : Prop :=
   ∀ (depth : Nat) (stack : List Frame) (l : List Char) (v j : Json) (t r : List Char),
     remaining p = l → Spec.NoWs l → Spec.Value l v t → Spec.Follows t → Closes stack v t j r →
-      ∃ rp, value cfg p depth stack = .ok (j, rp) ∧ Spec.Ws (remaining rp) r
+      StackSeenOk stack → (cfg.duplicateKeys = .allow ∨ UniqueKeys j) → depth = stack.length →
+        (∀ limit, cfg.maxDepth = some limit → Json.depth j ≤ limit) →
+          ∃ rp, value cfg p depth stack = .ok (j, rp) ∧ Spec.Ws (remaining rp) r
 
 private def ContinueComplete (cfg : Config) (p : s.Pos) : Prop :=
   ∀ (v j : Json) (depth : Nat) (stack : List Frame) (t r : List Char),
-    Spec.Ws (remaining p) t → Closes stack v t j r →
-      ∃ rp, continueWith cfg v p depth stack = .ok (j, rp) ∧ Spec.Ws (remaining rp) r
+    Spec.Ws (remaining p) t → Closes stack v t j r → StackSeenOk stack →
+      (cfg.duplicateKeys = .allow ∨ UniqueKeys j) → depth = stack.length →
+        (∀ limit, cfg.maxDepth = some limit → Json.depth j ≤ limit) →
+          ∃ rp, continueWith cfg v p depth stack = .ok (j, rp) ∧ Spec.Ws (remaining rp) r
 
 private def MemberComplete (cfg : Config) (p : s.Pos) : Prop :=
   ∀ (depth : Nat) (fields : Array (String × Json)) (seen : Std.HashSet String)
@@ -957,21 +1118,20 @@ private def MemberComplete (cfg : Config) (p : s.Pos) : Prop :=
       (t₁ t : List Char) (j : Json) (r : List Char),
     remaining p = l → Spec.NoWs l → Spec.Member l m t₁ → MembersRest t₁ ms t →
       Closes stack (.obj (fields ++ (m :: ms).toArray)) t j r →
-        ∃ rp, member cfg p depth fields seen stack = .ok (j, rp) ∧ Spec.Ws (remaining rp) r
+        SeenOk (fieldNames fields) seen → StackSeenOk stack →
+          (cfg.duplicateKeys = .allow ∨ UniqueKeys j) → depth = stack.length + 1 →
+            (∀ limit, cfg.maxDepth = some limit → Json.depth j ≤ limit) →
+              ∃ rp, member cfg p depth fields seen stack = .ok (j, rp) ∧ Spec.Ws (remaining rp) r
 
-private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
-    (hkeys : cfg.duplicateKeys = .allow) (hdig : cfg.maxNumberDigits = none) :
+private theorem machine_complete {cfg : Config} (hdig : cfg.maxNumberDigits = none) :
     ∀ (n : Nat) (p : s.Pos), p.remainingBytes ≤ n →
       ValueComplete cfg p ∧ ContinueComplete cfg p ∧ MemberComplete cfg p := by
-  have hdepth : ∀ depth, depthExceeded cfg depth = false := by
-    intro depth
-    simp [depthExceeded, hmax]
   intro n
   induction n using Nat.strongRecOn with
   | ind n ih =>
     intro p hp
     refine ⟨?_, ?_, ?_⟩
-    · intro depth stack l v j t r hl hnw hv hft hcl
+    · intro depth stack l v j t r hl hnw hv hft hcl hss hok hlen hfit
       cases hv with
       | null =>
         obtain ⟨q, hc, hq⟩ := step_of_remaining hl
@@ -982,7 +1142,7 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
           have := e.notLonger
           omega
         obtain ⟨rp, hres, hws⟩ := (ih _ hlt e.pos (Nat.le_refl _)).2.1 .null j depth stack t r
-          (by rw [hep]; exact Spec.Ws.nil) hcl
+          (by rw [hep]; exact Spec.Ws.nil) hcl hss hok hlen hfit
         exact ⟨rp, by rw [value_null hc hex]; exact hres, hws⟩
       | true_ =>
         obtain ⟨q, hc, hq⟩ := step_of_remaining hl
@@ -994,7 +1154,7 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
           omega
         obtain ⟨rp, hres, hws⟩ :=
           (ih _ hlt e.pos (Nat.le_refl _)).2.1 (.bool true) j depth stack t r
-            (by rw [hep]; exact Spec.Ws.nil) hcl
+            (by rw [hep]; exact Spec.Ws.nil) hcl hss hok hlen hfit
         exact ⟨rp, by rw [value_true hc hex]; exact hres, hws⟩
       | false_ =>
         obtain ⟨q, hc, hq⟩ := step_of_remaining hl
@@ -1006,7 +1166,7 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
           omega
         obtain ⟨rp, hres, hws⟩ :=
           (ih _ hlt e.pos (Nat.le_refl _)).2.1 (.bool false) j depth stack t r
-            (by rw [hep]; exact Spec.Ws.nil) hcl
+            (by rw [hep]; exact Spec.Ws.nil) hcl hss hok hlen hfit
         exact ⟨rp, by rw [value_false hc hex]; exact hres, hws⟩
       | str hs =>
         obtain ⟨q, res, hc, hstr, hval, hpos⟩ := str_complete hl hs
@@ -1016,7 +1176,7 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
           omega
         obtain ⟨rp, hres, hws⟩ :=
           (ih _ hlt res.pos (Nat.le_refl _)).2.1 (.str res.value) j depth stack t r
-            (by rw [hpos]; exact Spec.Ws.nil) (by rw [hval]; exact hcl)
+            (by rw [hpos]; exact Spec.Ws.nil) (by rw [hval]; exact hcl) hss hok hlen hfit
         exact ⟨rp, by rw [value_str hc hstr]; exact hres, hws⟩
       | num hn =>
         obtain ⟨c, u, hcu, hcd⟩ := Spec.num_head hn
@@ -1027,7 +1187,7 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
           omega
         obtain ⟨rp, hres, hws⟩ :=
           (ih _ hlt rn.pos (Nat.le_refl _)).2.1 (.num rn.value) j depth stack t r
-            (by rw [hnp]; exact Spec.Ws.nil) (by rw [hnv]; exact hcl)
+            (by rw [hnp]; exact Spec.Ws.nil) (by rw [hnv]; exact hcl) hss hok hlen hfit
         refine ⟨rp, ?_, hws⟩
         rw [value_num hc ?_ hnum]
         · exact hres
@@ -1053,8 +1213,11 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
                 omega
               obtain ⟨rp, hres, hws⟩ :=
                 (ih _ hlt after (Nat.le_refl _)).2.1 (.arr #[]) j depth stack t r
-                  (by rw [hafter]; exact htrail₂) hcl
-              exact ⟨rp, by rw [value_arr_empty hc (hdepth depth) hb₂]; exact hres, hws⟩
+                  (by rw [hafter]; exact htrail₂) hcl hss hok hlen hfit
+              refine ⟨rp, ?_, hws⟩
+              rw [value_arr_empty hc
+                (depthExceeded_false hlen hcl hfit (by simp [Json.depth])) hb₂]
+              exact hres
         | @items _ s₂ s₃ vs _ hb hels hend =>
           cases hb with
           | @mk s₁ _ hlead htrail =>
@@ -1074,8 +1237,10 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
               (ih _ hlt (skipWs q).pos (Nat.le_refl _)).1 (depth + 1) (.arr #[] :: stack)
                 (remaining (skipWs q).pos) v₁ j t₁ r rfl (noWs_skipWs q) hv₁
                 (elementsRest_follows hrest) (by simp only [Closes]; exact ⟨vs', t, hrest,
-                  by simpa using hcl⟩)
-            exact ⟨rp, by rw [value_arr_items hc (hdepth depth) hnb]; exact hres, hws⟩
+                  by simpa using hcl⟩) (stackSeenOk_cons trivial hss) hok (by simp [hlen]) hfit
+            refine ⟨rp, ?_, hws⟩
+            rw [value_arr_items hc (depthExceeded_false hlen hcl hfit (by simp [Json.depth])) hnb]
+            exact hres
       | obj ho =>
         cases ho with
         | @empty _ s₂ _ hb hend =>
@@ -1095,8 +1260,11 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
                 omega
               obtain ⟨rp, hres, hws⟩ :=
                 (ih _ hlt after (Nat.le_refl _)).2.1 (.obj #[]) j depth stack t r
-                  (by rw [hafter]; exact htrail₂) hcl
-              exact ⟨rp, by rw [value_obj_empty hc (hdepth depth) hb₂]; exact hres, hws⟩
+                  (by rw [hafter]; exact htrail₂) hcl hss hok hlen hfit
+              refine ⟨rp, ?_, hws⟩
+              rw [value_obj_empty hc
+                (depthExceeded_false hlen hcl hfit (by simp [Json.depth])) hb₂]
+              exact hres
         | @members _ s₂ s₃ ms _ hb hms hend =>
           cases hb with
           | @mk s₁ _ hlead htrail =>
@@ -1115,9 +1283,12 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
             obtain ⟨rp, hres, hws⟩ :=
               (ih _ hlt (skipWs q).pos (Nat.le_refl _)).2.2 (depth + 1) #[] ∅ stack
                 (remaining (skipWs q).pos) m₁ ms' t₁ t j r rfl (noWs_skipWs q) hm₁ hrest
-                (by simpa using hcl)
-            exact ⟨rp, by rw [value_obj_members hc (hdepth depth) hnb]; exact hres, hws⟩
-    · intro v j depth stack t r hws hcl
+                (by simpa using hcl) seenOk_empty hss hok (by simp [hlen]) hfit
+            refine ⟨rp, ?_, hws⟩
+            rw [value_obj_members hc
+              (depthExceeded_false hlen hcl hfit (by simp [Json.depth])) hnb]
+            exact hres
+    · intro v j depth stack t r hws hcl hss hok hlen hfit
       cases stack with
       | nil =>
         simp only [Closes] at hcl
@@ -1141,7 +1312,8 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
                 omega
               obtain ⟨rp, hres, hwsr⟩ :=
                 (ih _ hlt after (Nat.le_refl _)).2.1 (.arr (elems.push v)) j (depth - 1) outer t' r
-                  (by rw [hafter]; exact htrail) (by simpa using hcl₂)
+                  (by rw [hafter]; exact htrail) (by simpa using hcl₂) (stackSeenOk_tail hss) hok
+                  (by simp only [List.length_cons] at hlen; omega) hfit
               exact ⟨rp, by rw [continueWith_arr_close hb]; exact hres, hwsr⟩
           | @more _ t₁ t₂ v₂ vs' _ hsep hv hrest₂ =>
             cases hsep with
@@ -1162,6 +1334,8 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
                   (.arr (elems.push v) :: outer) (remaining (skipWs after).pos) v₂ j t₂ r rfl
                   (noWs_skipWs after) (Spec.value_ws hshift hv) (elementsRest_follows hrest₂)
                   (by simp only [Closes]; exact ⟨vs', t', hrest₂, by simpa using hcl₂⟩)
+                  (stackSeenOk_cons trivial (stackSeenOk_tail hss)) hok
+                  (by simp only [List.length_cons] at hlen ⊢; omega) hfit
               exact ⟨rp, by rw [continueWith_arr_sep hb]; exact hres, hwsr⟩
         | obj fields seen name =>
           simp only [Closes] at hcl
@@ -1180,6 +1354,8 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
               obtain ⟨rp, hres, hwsr⟩ :=
                 (ih _ hlt after (Nat.le_refl _)).2.1 (.obj (fields.push (name, v))) j (depth - 1)
                   outer t' r (by rw [hafter]; exact htrail) (by simpa using hcl₂)
+                  (stackSeenOk_tail hss) hok
+                  (by simp only [List.length_cons] at hlen; omega) hfit
               exact ⟨rp, by rw [continueWith_obj_close hb]; exact hres, hwsr⟩
           | @more _ t₁ t₂ m₂ ms' _ hsep hm hrest₂ =>
             cases hsep with
@@ -1199,8 +1375,13 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
                 (ih _ hlt (skipWs after).pos (Nat.le_refl _)).2.2 depth (fields.push (name, v))
                   seen outer (remaining (skipWs after).pos) m₂ ms' t₂ t' j r rfl
                   (noWs_skipWs after) (Spec.member_ws hshift hm) hrest₂ (by simpa using hcl₂)
+                  (by
+                    have hf := stackSeenOk_head hss
+                    simp only [FrameSeenOk] at hf
+                    simpa using hf)
+                  (stackSeenOk_tail hss) hok (by simp only [List.length_cons] at hlen; omega) hfit
               exact ⟨rp, by rw [continueWith_obj_sep hb]; exact hres, hwsr⟩
-    · intro depth fields seen stack l m ms t₁ t j r hl hnw hm hrest hcl
+    · intro depth fields seen stack l m ms t₁ t j r hl hnw hm hrest hcl hso hss hok hlen hfit
       cases hm with
       | @mk _ s₂ s₃ k v _ hstr hsep hv =>
         obtain ⟨q, res, hc, hs, hval, hpos⟩ := str_complete hl hstr
@@ -1224,8 +1405,22 @@ private theorem machine_complete {cfg : Config} (hmax : cfg.maxDepth = none)
               (remaining (skipWs after).pos) v j t₁ r rfl (noWs_skipWs after)
               (Spec.value_ws hshift hv) (membersRest_follows hrest)
               (by simp only [Closes]; exact ⟨ms, t, hrest, by rw [hval]; simpa using hcl⟩)
+              (stackSeenOk_cons
+                (show SeenOk (fieldNames fields ++ [res.value]) (seen.insert res.value) from
+                  seenOk_insert hso) hss) hok (by simp only [List.length_cons]; omega) hfit
+          have hdup : (cfg.duplicateKeys == .reject && seen.contains res.value) = false := by
+            rcases hok with hallow | hu
+            · simp [hallow]
+            · have hnot : k ∉ fieldNames fields := name_not_read (closes_uniqueKeys stack hcl hu)
+              have hs' : seen.contains res.value = false := by
+                cases hc' : seen.contains res.value with
+                | false => rfl
+                | true =>
+                  rw [hval] at hc'
+                  exact absurd (hso k hc') hnot
+              simp [hs']
           refine ⟨rp, ?_, hwsr⟩
-          rw [member_value hc hs (by simp [hkeys]) hb]
+          rw [member_value hc hs hdup hb]
           exact hres
 
 /-! ## Text -/
@@ -1255,17 +1450,23 @@ private theorem head_ne_bom {l : List Char} {j : Json} (h : Spec.Text l j) {c : 
   exact Spec.not_value_cons hnw (hne 'f' (by decide)) (hne 'n' (by decide)) (hne 't' (by decide))
     (hne '"' (by decide)) (hne '[' (by decide)) (hne '{' (by decide)) (hne '-' (by decide)) hd hv
 
-/-- Whatever the grammar derives from the text at `start`, the machine reads. -/
-theorem parseFrom_complete {cfg : Config} (hmax : cfg.maxDepth = none)
-    (hkeys : cfg.duplicateKeys = .allow) (hdig : cfg.maxNumberDigits = none) {start : s.Pos}
-    {j : Json} (h : Spec.Text (remaining start) j) : parseFrom cfg start = .ok j := by
+/--
+Whatever the grammar derives from the text at `start`, the machine reads. Refusing a repeated
+name is a restriction of the grammar rather than a defect, so the reading that refuses one is
+covered too, on the values whose names are distinct.
+-/
+theorem parseFrom_complete {cfg : Config} (hdig : cfg.maxNumberDigits = none) {start : s.Pos}
+    {j : Json} (hkeys : cfg.duplicateKeys = .allow ∨ UniqueKeys j)
+    (hdepth : ∀ limit, cfg.maxDepth = some limit → Json.depth j ≤ limit)
+    (h : Spec.Text (remaining start) j) : parseFrom cfg start = .ok j := by
   obtain ⟨s₁, s₂, hws, hv, hend⟩ := h
   have hshift : Spec.Ws s₁ (remaining (skipWs start).pos) :=
     Spec.Ws.to_noWs hws (ws_skipWs start) (noWs_skipWs start)
   obtain ⟨rp, hres, hwsr⟩ :=
-    (machine_complete hmax hkeys hdig (skipWs start).pos.remainingBytes (skipWs start).pos
+    (machine_complete hdig (skipWs start).pos.remainingBytes (skipWs start).pos
         (Nat.le_refl _)).1 0 [] (remaining (skipWs start).pos) j j s₂ s₂ rfl (noWs_skipWs start)
       (Spec.value_ws hshift hv) (Spec.follows_of_ws hend) (by simp [Closes])
+      (fun f hf => absurd hf (by simp)) hkeys rfl hdepth
   have hnil : remaining (skipWs rp).pos = [] :=
     skipWs_complete (hwsr.trans hend) (fun c t hct => absurd hct (by simp))
   have hstep : step? (skipWs rp).pos = none := by
@@ -1277,22 +1478,57 @@ theorem parseFrom_complete {cfg : Config} (hmax : cfg.maxDepth = none)
       exact absurd hnil (by simp)
   simp only [parseFrom, hres, hstep]
 
-/--
-No false rejects: text the grammar derives is read, and read as the value the grammar gives it.
-The knobs that refuse legal text are off, which is what the three hypotheses say.
--/
-theorem parse_complete {s : String} {cfg : Config} {j : Json} (hmax : cfg.maxDepth = none)
-    (hkeys : cfg.duplicateKeys = .allow) (hdig : cfg.maxNumberDigits = none)
-    (h : Spec.TextOf s j) : parse s cfg = .ok j := by
+/-- The parser never looks for a byte order mark in text the grammar derives. -/
+private theorem parse_eq_parseFrom {cfg : Config} {j : Json} (h : Spec.TextOf s j) :
+    parse s cfg = parseFrom cfg s.startPos := by
   have h' : Spec.Text (remaining s.startPos) j := by rw [remaining_startPos]; exact h
   cases hc : step? s.startPos with
-  | none =>
-    simp only [parse, hc]
-    exact parseFrom_complete hmax hkeys hdig h'
+  | none => simp only [parse, hc]
   | some cq =>
     obtain ⟨c, q⟩ := cq
     have hbom := head_ne_bom h' (remaining_step hc)
     simp only [parse, hc, if_neg (by simp [hbom] : ¬(cfg.ignoreBOM && c.toNat == 0xFEFF) = true)]
-    exact parseFrom_complete hmax hkeys hdig h'
+
+/--
+No false rejects: text the grammar derives is read, and read as the value the grammar gives it.
+The hypotheses are the knobs that refuse legal text by design: the two limits off, and either
+repeated names allowed or a value that has none.
+-/
+theorem parse_complete {s : String} {cfg : Config} {j : Json}
+    (hdig : cfg.maxNumberDigits = none) (hkeys : cfg.duplicateKeys = .allow ∨ UniqueKeys j)
+    (hdepth : ∀ limit, cfg.maxDepth = some limit → Json.depth j ≤ limit)
+    (h : Spec.TextOf s j) : parse s cfg = .ok j := by
+  rw [parse_eq_parseFrom h]
+  exact parseFrom_complete hdig hkeys hdepth (by rw [remaining_startPos]; exact h)
+
+/-- On text the grammar derives, what the parser returns is settled before it is run. -/
+theorem eq_of_parse_of_textOf {cfg : Config} {j j' : Json} (ht : Spec.TextOf s j)
+    (h : parse s cfg = .ok j') : j' = j := by
+  rw [parse_eq_parseFrom ht] at h
+  have hs := text_parseFrom h
+  rw [remaining_startPos] at hs
+  exact Spec.text_unique hs ht
+
+/--
+The other half of the strict reading: text that derives a value with a repeated name is refused,
+rather than read as something else. Together with `parse_complete` that settles what the strict
+reading does with every text the grammar derives.
+-/
+theorem parse_error_of_not_uniqueKeys {cfg : Config} {j : Json}
+    (hkeys : cfg.duplicateKeys = .reject) (ht : Spec.TextOf s j) (hu : ¬ UniqueKeys j) :
+    ∃ e, parse s cfg = .error e := by
+  cases h : parse s cfg with
+  | error e => exact ⟨e, rfl⟩
+  | ok j' => exact absurd (eq_of_parse_of_textOf ht h ▸ uniqueKeys_parse hkeys h) hu
+
+/-- The same, through the decoder, which is where RFC 8259 section 8.1 is enforced. -/
+theorem parseBytes_complete {b : ByteArray} {cfg : Config} {text : String} {j : Json}
+    (hdig : cfg.maxNumberDigits = none)
+    (hkeys : cfg.duplicateKeys = .allow ∨ UniqueKeys j)
+    (hdepth : ∀ limit, cfg.maxDepth = some limit → Json.depth j ≤ limit)
+    (hb : String.fromUTF8? b = some text) (h : Spec.TextOf text j) :
+    parseBytes b cfg = .ok j := by
+  simp only [parseBytes, hb]
+  exact parse_complete hdig hkeys hdepth h
 
 end Json.Parser

@@ -16,20 +16,22 @@ Reading what was written gives back what was written.
 
 Both halves are already proved: what the printer emits is text the grammar derives, and text the
 grammar derives is read as the value the grammar gives it. The round trip is their composition,
-and it holds for a configuration whose limits are off, since those refuse text the grammar
-accepts by design.
+and it holds wherever the reading refuses nothing the grammar accepts: the digit limit off,
+either repeated names allowed or a value that has none, and a value within the nesting limit.
 -/
 
 variable {cfg : Config} {j : Json}
 
-theorem parse_compress (hmax : cfg.maxDepth = none) (hkeys : cfg.duplicateKeys = .allow)
-    (hdig : cfg.maxNumberDigits = none) (h : CanonicalNumbers j) :
+theorem parse_compress (hdig : cfg.maxNumberDigits = none)
+    (hkeys : cfg.duplicateKeys = .allow ∨ UniqueKeys j)
+    (hdepth : ∀ limit, cfg.maxDepth = some limit → depth j ≤ limit) (h : CanonicalNumbers j) :
     parse (compress j) cfg = .ok j :=
-  Parser.parse_complete hmax hkeys hdig (Printer.textOf_compress h)
+  Parser.parse_complete hdig hkeys hdepth (Printer.textOf_compress h)
 
-theorem parse_pretty (hmax : cfg.maxDepth = none) (hkeys : cfg.duplicateKeys = .allow)
-    (hdig : cfg.maxNumberDigits = none) (h : CanonicalNumbers j) (indent : Nat) :
-    parse (pretty j indent) cfg = .ok j :=
-  Parser.parse_complete hmax hkeys hdig (Printer.textOf_pretty h indent)
+theorem parse_pretty (hdig : cfg.maxNumberDigits = none)
+    (hkeys : cfg.duplicateKeys = .allow ∨ UniqueKeys j)
+    (hdepth : ∀ limit, cfg.maxDepth = some limit → depth j ≤ limit) (h : CanonicalNumbers j)
+    (indent : Nat) : parse (pretty j indent) cfg = .ok j :=
+  Parser.parse_complete hdig hkeys hdepth (Printer.textOf_pretty h indent)
 
 end Json

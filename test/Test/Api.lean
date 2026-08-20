@@ -72,6 +72,9 @@ example := @Json.Parser.skipWs_complete
 example := @Json.Parser.uniqueKeys_parse
 example := @Json.Parser.parse_complete
 example := @Json.Parser.parseFrom_complete
+example := @Json.Parser.parseBytes_complete
+example := @Json.Parser.parse_error_of_not_uniqueKeys
+example := @Json.Parser.eq_of_parse_of_textOf
 example := @Json.parse_compress
 example := @Json.parse_pretty
 
@@ -84,9 +87,9 @@ The other direction, composed with what it needs: anything read can be written a
 Naming it here is what says the round trip theorem's hypothesis is one a caller can discharge.
 -/
 example {s : String} {j : Json} (h : Json.parse s {} = .ok j) :
-    Json.parse (Json.compress j)
-        { duplicateKeys := .allow, maxDepth := none, maxNumberDigits := none } = .ok j :=
-  Json.parse_compress rfl rfl rfl (Json.Parser.canonicalNumbers_parse h)
+    Json.parse (Json.compress j) { maxDepth := none, maxNumberDigits := none } = .ok j :=
+  Json.parse_compress rfl (.inr (Json.Parser.uniqueKeys_parse rfl h)) (by simp)
+    (Json.Parser.canonicalNumbers_parse h)
 
 example := @Json.Printer.textOf_compress
 example := @Json.Printer.textOf_pretty
