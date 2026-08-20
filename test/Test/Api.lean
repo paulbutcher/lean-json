@@ -70,10 +70,23 @@ example := @Json.Parser.canonicalNumbers_parse
 example := @Json.Parser.parse_eq_of_isOk
 example := @Json.Parser.skipWs_complete
 example := @Json.Parser.uniqueKeys_parse
+example := @Json.Parser.parse_complete
+example := @Json.Parser.parseFrom_complete
+example := @Json.parse_compress
+example := @Json.parse_pretty
 
 /-- The headline claim, reached through the entry point a caller actually calls. -/
 example {s : String} {j : Json} (h : Json.parse s { ignoreBOM := false } = .ok j) :
     Json.Spec.TextOf s j := Json.Parser.textOf_parse rfl h
+
+/--
+The other direction, composed with what it needs: anything read can be written and read back.
+Naming it here is what says the round trip theorem's hypothesis is one a caller can discharge.
+-/
+example {s : String} {j : Json} (h : Json.parse s {} = .ok j) :
+    Json.parse (Json.compress j)
+        { duplicateKeys := .allow, maxDepth := none, maxNumberDigits := none } = .ok j :=
+  Json.parse_compress rfl rfl rfl (Json.Parser.canonicalNumbers_parse h)
 
 example := @Json.Printer.textOf_compress
 example := @Json.Printer.textOf_pretty

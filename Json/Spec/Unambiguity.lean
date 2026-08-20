@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import Json.Spec
+public import Json.Spec.Follow
 public import Json.Spec.Length
 
 public section
@@ -23,109 +24,18 @@ The relations are deliberately not deterministic in their remainder, exactly as 
 down. A value is followed either by the end of the text or by one of the characters that
 separates or closes, which is what `Follows` says, and that is enough to make the value unique.
 Whitespace is the other: `ws` appears on both sides of every structural character, so two
-derivations of the same text can divide one run of spaces differently, and the lemmas below say
-that they still reach the same place whenever what comes next is not whitespace.
+derivations of the same text can divide one run of spaces differently, and `Json.Spec.Follow`
+says that they still reach the same place whenever what comes next is not whitespace.
 -/
-
-/-- A list that whitespace cannot be taken from, which is where a `Ws` derivation has to stop. -/
-@[expose] def NoWs (l : List Char) : Prop := ∀ c t, l = c :: t → isWs c = false
-
-/-- What may follow a value: the end of the text, whitespace, or a separator or closing bracket. -/
-@[expose] def Follows (l : List Char) : Prop :=
-  ∀ c t, l = c :: t → isWs c = true ∨ c = ',' ∨ c = ']' ∨ c = '}'
-
-theorem Ws.trans {a b c : List Char} (h₁ : Ws a b) : Ws b c → Ws a c := by
-  induction h₁ with
-  | nil => exact fun h => h
-  | cons hc _ ih => exact fun h => Ws.cons hc (ih h)
-
-/-- Two runs of whitespace taken from the same text agree as far as the shorter one goes. -/
-theorem Ws.confluent {s r₁ : List Char} (h₁ : Ws s r₁) :
-    ∀ {r₂ : List Char}, Ws s r₂ → Ws r₁ r₂ ∨ Ws r₂ r₁ := by
-  induction h₁ with
-  | nil => exact fun h₂ => Or.inl h₂
-  | @cons c s r hc h₁' ih =>
-    intro r₂ h₂
-    cases h₂ with
-    | nil => exact Or.inr (Ws.cons hc h₁')
-    | cons _ h₂' => exact ih h₂'
-
-/-- Whitespace stops in one place only, once what follows it is not whitespace. -/
-theorem Ws.eq_of_noWs {s r₁ r₂ : List Char} (h₁ : Ws s r₁) (h₂ : Ws s r₂)
-    (n₁ : NoWs r₁) (n₂ : NoWs r₂) : r₁ = r₂ := by
-  rcases h₁.confluent h₂ with h | h
-  · cases h with
-    | nil => rfl
-    | cons hc _ => rw [n₁ _ _ rfl] at hc; exact absurd hc (by decide)
-  · cases h with
-    | nil => rfl
-    | cons hc _ => rw [n₂ _ _ rfl] at hc; exact absurd hc (by decide)
-
-
 
 /-! ## Numbers
 
-A number is where the grammar is genuinely ambiguous about its remainder, so each part of one
-carries the condition that pins it down: a run of digits must not be followed by a digit, a
-fraction not by a point, an exponent not by an `e`. Each of those follows from `Follows` at the
-end of the number, and in between from the shape of the part that comes after.
+A number is where the grammar is genuinely ambiguous about its remainder, so each part of one is
+unique only once its remainder is pinned down, which is what `Json.Spec.Follow` supplies: a run
+of digits must not be followed by a digit, a fraction not by a point, an exponent not by an `e`.
 -/
 
-private def NoDigit (l : List Char) : Prop := ∀ c t, l = c :: t → isDigit c = false
-
-private def NoFrac (l : List Char) : Prop :=
-  ∀ c t, l = c :: t → isDigit c = false ∧ c ≠ '.'
-
-private def NoExp (l : List Char) : Prop :=
-  ∀ c t, l = c :: t → isDigit c = false ∧ c ≠ 'e' ∧ c ≠ 'E'
-
-private theorem eq_of_isWs {c : Char} (h : isWs c = true) :
-    c = ' ' ∨ c = '\t' ∨ c = '\n' ∨ c = '\x0d' := by simpa [isWs, or_assoc] using h
-
-private theorem noExp_of_follows {l : List Char} (h : Follows l) : NoExp l := by
-  intro c t hl
-  rcases h c t hl with hw | rfl | rfl | rfl
-  · rcases eq_of_isWs hw with rfl | rfl | rfl | rfl <;> exact ⟨by decide, by decide, by decide⟩
-  all_goals exact ⟨by decide, by decide, by decide⟩
-
-private theorem noFrac_of_follows {l : List Char} (h : Follows l) : NoFrac l := by
-  intro c t hl
-  rcases h c t hl with hw | rfl | rfl | rfl
-  · rcases eq_of_isWs hw with rfl | rfl | rfl | rfl <;> exact ⟨by decide, by decide⟩
-  all_goals exact ⟨by decide, by decide⟩
-
-private theorem noDigit_of_noFrac {l : List Char} (h : NoFrac l) : NoDigit l :=
-  fun c t hl => (h c t hl).1
-
-private theorem noDigit_of_noExp {l : List Char} (h : NoExp l) : NoDigit l :=
-  fun c t hl => (h c t hl).1
-
-private theorem digits_head {s : List Char} {v n : Nat} {r : List Char} (h : Digits s v n r) :
-    ∃ c t, s = c :: t ∧ isDigit c = true := by
-  cases h with
-  | last hd => exact ⟨_, _, rfl, hd⟩
-  | cons hd _ => exact ⟨_, _, rfl, hd⟩
-
-private theorem not_digits_cons {c : Char} (hc : isDigit c = false) {s : List Char} {v n : Nat}
-    {r : List Char} : ¬ Digits (c :: s) v n r := by
-  intro h
-  obtain ⟨c', t', hct, hd⟩ := digits_head h
-  injection hct with hcc
-  subst hcc
-  rw [hc] at hd
-  exact absurd hd (by decide)
-
-private theorem int_head {s : List Char} {v : Nat} {r : List Char} (h : Int' s v r) :
-    ∃ c t, s = c :: t ∧ isDigit c = true := by
-  cases h with
-  | zero => exact ⟨_, _, rfl, by decide⟩
-  | digits hc _ =>
-    refine ⟨_, _, rfl, ?_⟩
-    simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
-    simp only [isDigit, Bool.and_eq_true, decide_eq_true_eq]
-    exact ⟨Char.le_trans (by decide) hc.1, hc.2⟩
-
-private theorem digits_unique {s : List Char} {v₁ n₁ : Nat} {r₁ : List Char}
+theorem digits_unique {s : List Char} {v₁ n₁ : Nat} {r₁ : List Char}
     (h₁ : Digits s v₁ n₁ r₁) : ∀ {v₂ n₂ : Nat} {r₂ : List Char}, Digits s v₂ n₂ r₂ →
       NoDigit r₁ → NoDigit r₂ → v₁ = v₂ ∧ n₁ = n₂ ∧ r₁ = r₂ := by
   induction h₁ with
@@ -248,36 +158,6 @@ private theorem sign_unique {s : List Char} {b₁ b₂ : Bool} {a₁ a₂ : List
       exact absurd hd (by decide)
     | minus => exact ⟨rfl, rfl⟩
 
-private theorem noFrac_after_exp {c r : List Char} {e : Int} (he : Exp c e r) (hr : Follows r) :
-    NoFrac c := by
-  cases he with
-  | absent => exact noFrac_of_follows hr
-  | bare hE _ =>
-    intro c' t' h
-    injection h with hcc
-    subst hcc
-    rcases hE with rfl | rfl <;> exact ⟨by decide, by decide⟩
-  | plus hE _ =>
-    intro c' t' h
-    injection h with hcc
-    subst hcc
-    rcases hE with rfl | rfl <;> exact ⟨by decide, by decide⟩
-  | minus hE _ =>
-    intro c' t' h
-    injection h with hcc
-    subst hcc
-    rcases hE with rfl | rfl <;> exact ⟨by decide, by decide⟩
-
-private theorem noDigit_after_int {b c r : List Char} {f nf : Nat} {e : Int}
-    (hf : Frac b f nf c) (he : Exp c e r) (hr : Follows r) : NoDigit b := by
-  cases hf with
-  | present _ =>
-    intro c' t' h
-    injection h with hcc
-    subst hcc
-    decide
-  | absent => exact noDigit_of_noFrac (noFrac_after_exp he hr)
-
 /-- What may follow a number is enough to say which number it is. -/
 theorem num_unique {s : List Char} {n₁ n₂ : Number} {r₁ r₂ : List Char}
     (h₁ : Num s n₁ r₁) (h₂ : Num s n₂ r₂) (f₁ : Follows r₁) (f₂ : Follows r₂) :
@@ -306,13 +186,6 @@ no `Ch` can begin with. The one place two constructors could both apply is a `\u
 what separates them is that no character carries a surrogate code point: a four-digit escape in
 the surrogate range denotes nothing on its own, so only the pair rule can derive it.
 -/
-
-private def NoCh (l : List Char) : Prop := ∀ c r, ¬ Ch l c r
-
-private theorem noCh_quote {t : List Char} : NoCh ('"' :: t) := by
-  intro c r h
-  cases h with
-  | unescaped hu => exact absurd hu (by decide)
 
 private theorem hex4_unique {s : List Char} {v₁ v₂ : Nat} {r₁ r₂ : List Char}
     (h₁ : Hex4 s v₁ r₁) (h₂ : Hex4 s v₂ r₂) : v₁ = v₂ ∧ r₁ = r₂ := by
@@ -440,12 +313,6 @@ private def WsEq (a b : List Char) : Prop := Ws a b ∨ Ws b a
 
 private theorem WsEq.refl (a : List Char) : WsEq a a := Or.inl Ws.nil
 
-private theorem noWs_cons {t : Char} {u : List Char} (h : isWs t = false) : NoWs (t :: u) := by
-  intro c t' hc
-  injection hc with hcc
-  rw [← hcc]
-  exact h
-
 /-- Whitespace either side of a structural character does not move the character. -/
 private theorem wsEq_token_eq {a b : List Char} {t₁ t₂ : Char} {u₁ u₂ : List Char}
     (h : WsEq a b) (h₁ : Ws a (t₁ :: u₁)) (h₂ : Ws b (t₂ :: u₂))
@@ -459,7 +326,7 @@ private theorem wsEq_token_eq {a b : List Char} {t₁ t₂ : Char} {u₁ u₂ : 
   · exact key h₁ (hab.trans h₂)
   · exact key (hba.trans h₁) h₂
 
-private theorem token_ws {x y : List Char} {t : Char} {r : List Char} (hnw : isWs t = false)
+theorem token_ws {x y : List Char} {t : Char} {r : List Char} (hnw : isWs t = false)
     (hw : Ws x y) (h : Token t x r) : Token t y r := by
   cases h with
   | mk h₁ h₂ =>
@@ -467,78 +334,19 @@ private theorem token_ws {x y : List Char} {t : Char} {r : List Char} (hnw : isW
     · exact Token.mk hc h₂
     · exact Token.mk (by rw [ws_eq_of_not_isWs hnw hc]; exact Ws.nil) h₂
 
-private theorem isWs_of_isDigit {c : Char} (h : isDigit c = true) : isWs c = false := by
-  cases hw : isWs c with
-  | false => rfl
-  | true => rcases eq_of_isWs hw with rfl | rfl | rfl | rfl <;> exact absurd h (by decide)
-
-private theorem digit_ne {c d : Char} (hc : isDigit c = true) (hd : isDigit d = false) : c ≠ d := by
-  rintro rfl
-  rw [hd] at hc
-  exact absurd hc (by decide)
-
-private theorem num_head {s : List Char} {n : Number} {r : List Char} (h : Num s n r) :
-    ∃ c t, s = c :: t ∧ (c = '-' ∨ isDigit c = true) := by
-  cases h with
-  | mk hs hi _ _ =>
-    cases hs with
-    | absent =>
-      obtain ⟨c, t, hct, hd⟩ := int_head hi
-      exact ⟨c, t, hct, Or.inr hd⟩
-    | minus => exact ⟨_, _, rfl, Or.inl rfl⟩
-
-private theorem not_num_cons {c : Char} {t : List Char} {n : Number} {r : List Char}
-    (h₁ : c ≠ '-') (h₂ : isDigit c = false) : ¬ Num (c :: t) n r := by
-  intro h
-  obtain ⟨c', t', hct, hc⟩ := num_head h
-  injection hct with hcc
-  subst hcc
-  rcases hc with rfl | hd
-  · exact h₁ rfl
-  · rw [h₂] at hd
-    exact absurd hd (by decide)
-
-private theorem not_arr_cons {c : Char} {t : List Char} {e : Array Json} {r : List Char}
-    (hw : isWs c = false) (hne : c ≠ '[') : ¬ Arr (c :: t) e r := by
-  intro h
-  cases h with
-  | empty hb _ => exact not_token_of_ne hw hne hb
-  | items hb _ _ => exact not_token_of_ne hw hne hb
-
-private theorem not_obj_cons {c : Char} {t : List Char} {f : Array (String × Json)}
-    {r : List Char} (hw : isWs c = false) (hne : c ≠ '{') : ¬ Object (c :: t) f r := by
-  intro h
-  cases h with
-  | empty hb _ => exact not_token_of_ne hw hne hb
-  | members hb _ _ => exact not_token_of_ne hw hne hb
-
-private theorem not_value_cons {c : Char} {t : List Char} {j : Json} {r : List Char}
-    (hw : isWs c = false) (hf : c ≠ 'f') (hn : c ≠ 'n') (ht : c ≠ 't') (hq : c ≠ '"')
-    (hb : c ≠ '[') (hc : c ≠ '{') (hm : c ≠ '-') (hd : isDigit c = false) :
-    ¬ Value (c :: t) j r := by
-  intro h
-  cases h with
-  | false_ => exact hf rfl
-  | null => exact hn rfl
-  | true_ => exact ht rfl
-  | str hs => cases hs with | mk _ => exact hq rfl
-  | num hn' => exact not_num_cons hm hd hn'
-  | arr ha => exact not_arr_cons hw hb ha
-  | obj ho => exact not_obj_cons hw hc ho
-
-private theorem arr_ws {x y : List Char} {e : Array Json} {r : List Char} (hw : Ws x y)
+theorem arr_ws {x y : List Char} {e : Array Json} {r : List Char} (hw : Ws x y)
     (h : Arr x e r) : Arr y e r := by
   cases h with
   | empty hb he => exact Arr.empty (token_ws (by decide) hw hb) he
   | items hb hel he => exact Arr.items (token_ws (by decide) hw hb) hel he
 
-private theorem obj_ws {x y : List Char} {f : Array (String × Json)} {r : List Char} (hw : Ws x y)
+theorem obj_ws {x y : List Char} {f : Array (String × Json)} {r : List Char} (hw : Ws x y)
     (h : Object x f r) : Object y f r := by
   cases h with
   | empty hb he => exact Object.empty (token_ws (by decide) hw hb) he
   | members hb hms he => exact Object.members (token_ws (by decide) hw hb) hms he
 
-private theorem value_ws {x y : List Char} {j : Json} {r : List Char} (hw : Ws x y)
+theorem value_ws {x y : List Char} {j : Json} {r : List Char} (hw : Ws x y)
     (h : Value x j r) : Value y j r := by
   cases h with
   | false_ => rw [ws_eq_of_not_isWs (by decide) hw]; exact Value.false_
@@ -559,13 +367,13 @@ private theorem value_ws {x y : List Char} {j : Json} {r : List Char} (hw : Ws x
   | arr ha => exact Value.arr (arr_ws hw ha)
   | obj ho => exact Value.obj (obj_ws hw ho)
 
-private theorem elements_ws {x y : List Char} {vs : List Json} {r : List Char} (hw : Ws x y)
+theorem elements_ws {x y : List Char} {vs : List Json} {r : List Char} (hw : Ws x y)
     (h : Elements x vs r) : Elements y vs r := by
   cases h with
   | one hv => exact Elements.one (value_ws hw hv)
   | more hv hs he => exact Elements.more (value_ws hw hv) hs he
 
-private theorem member_ws {x y : List Char} {m : String × Json} {r : List Char} (hw : Ws x y)
+theorem member_ws {x y : List Char} {m : String × Json} {r : List Char} (hw : Ws x y)
     (h : Member x m r) : Member y m r := by
   cases h with
   | mk hstr hsep hval =>
@@ -574,7 +382,7 @@ private theorem member_ws {x y : List Char} {m : String × Json} {r : List Char}
       rw [ws_eq_of_not_isWs (by decide) hw]
       exact Member.mk (Str.mk hcs) hsep hval
 
-private theorem members_ws {x y : List Char} {ms : List (String × Json)} {r : List Char}
+theorem members_ws {x y : List Char} {ms : List (String × Json)} {r : List Char}
     (hw : Ws x y) (h : Members x ms r) : Members y ms r := by
   cases h with
   | one hm => exact Members.one (member_ws hw hm)
@@ -607,66 +415,6 @@ private theorem ws_to_token {a b : List Char} {t : Char} {u : List Char} (h : Ws
     · rw [ws_eq_of_not_isWs hnw hc]
       exact Ws.nil
   · exact hba.trans hws
-
-private theorem follows_of_token {t : Char} {s r : List Char} (h : Token t s r)
-    (ht : t = ',' ∨ t = ']' ∨ t = '}') : Follows s := by
-  intro c t' hs
-  subst hs
-  cases h with
-  | mk w _ =>
-    cases w with
-    | nil =>
-      rcases ht with rfl | rfl | rfl
-      · exact Or.inr (Or.inl rfl)
-      · exact Or.inr (Or.inr (Or.inl rfl))
-      · exact Or.inr (Or.inr (Or.inr rfl))
-    | cons hc _ => exact Or.inl hc
-
-private theorem follows_of_ws {l : List Char} (h : Ws l []) : Follows l := by
-  intro c t hl
-  subst hl
-  cases h with
-  | cons hc _ => exact Or.inl hc
-
-private theorem arr_begin {s : List Char} {e : Array Json} {r : List Char} (h : Arr s e r) :
-    ∃ u, Ws s ('[' :: u) := by
-  cases h with
-  | empty hb _ => cases hb with | mk w _ => exact ⟨_, w⟩
-  | items hb _ _ => cases hb with | mk w _ => exact ⟨_, w⟩
-
-private theorem obj_begin {s : List Char} {f : Array (String × Json)} {r : List Char}
-    (h : Object s f r) : ∃ u, Ws s ('{' :: u) := by
-  cases h with
-  | empty hb _ => cases hb with | mk w _ => exact ⟨_, w⟩
-  | members hb _ _ => cases hb with | mk w _ => exact ⟨_, w⟩
-
-private theorem str_head {s : List Char} {v : String} {r : List Char} (h : Str s v r) :
-    ∃ t, s = '"' :: t := by cases h with | mk _ => exact ⟨_, rfl⟩
-
-private theorem not_str_cons {c : Char} {t : List Char} {v : String} {r : List Char}
-    (hne : c ≠ '"') : ¬ Str (c :: t) v r := by
-  intro h
-  cases h with
-  | mk _ => exact hne rfl
-
-private theorem not_value_bracket {t : List Char} {j : Json} {r : List Char} :
-    ¬ Value (']' :: t) j r :=
-  not_value_cons (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
-    (by decide) (by decide) (by decide)
-
-private theorem not_elements_bracket {t : List Char} {vs : List Json} {r : List Char} :
-    ¬ Elements (']' :: t) vs r := by
-  intro h
-  cases h with
-  | one hv => exact not_value_bracket hv
-  | more hv _ _ => exact not_value_bracket hv
-
-private theorem not_members_brace {t : List Char} {ms : List (String × Json)} {r : List Char} :
-    ¬ Members ('}' :: t) ms r := by
-  intro h
-  cases h with
-  | one hm => cases hm with | mk hs _ _ => cases hs
-  | more hm _ _ => cases hm with | mk hs _ _ => cases hs
 
 private def ArrUnique (s : List Char) : Prop :=
   ∀ {e₁ r₁ e₂ r₂}, Arr s e₁ r₁ → Arr s e₂ r₂ → e₁ = e₂ ∧ WsEq r₁ r₂

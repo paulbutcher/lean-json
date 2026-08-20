@@ -6,7 +6,8 @@ Nothing in it is `partial`, nothing in it can panic, and nothing in it walks a v
 stack: reading, writing, comparing, hashing and measuring all keep their work on the heap, so a
 document that nests a million deep is an error or a long string rather than a crash. The grammar
 of RFC 8259 is transcribed in `Json.Spec`, and both directions are proved against it: whatever
-the printer emits, the grammar accepts; whatever the parser accepts, the grammar derives.
+the printer emits, the grammar accepts; whatever the parser accepts, the grammar derives; and
+whatever the grammar derives, the parser reads.
 
 The library depends on `Init` and `Std` and on nothing in the `Lean` namespace, so a program that
 reads and writes JSON does not carry the Lean frontend with it. `deriving ToJson, FromJson` and
@@ -132,6 +133,14 @@ Proved:
 - Whatever the printer emits, the grammar accepts: `CanonicalNumbers j → Spec.TextOf (compress j) j`,
   and the same for `pretty`. The work-stack traversal that runs is proved equal to a structural
   description of the same text, and the grammar theorems are proved about that.
+- Whatever the grammar derives, the parser reads, and reads as the value the grammar gives it:
+  `Spec.TextOf s j → parse s cfg = .ok j`, for a configuration whose limits on nesting, on
+  digits and on repeated names are off, those being the three things that refuse legal text by
+  design. No hypothesis about the byte order mark is needed in either direction, since no text
+  of the grammar begins with one.
+- Reading what was written gives back what was written, for both forms:
+  `CanonicalNumbers j → parse (compress j) cfg = .ok j`, and the same for `pretty`. That is the
+  two soundness halves and completeness composed, under the same configuration.
 - Output is always valid UTF-8, by construction, since it is a `String`.
 - Every walk of a whole value agrees with one that keeps its pending work in a list rather than
   on the stack, and it is the second that runs: `Alg.fold_eq_run`, with `beq`, `hash`,
@@ -163,12 +172,14 @@ code they describe.
 
 Not proved, and covered by tests instead:
 
-- **Completeness, meaning no false rejects.** Soundness says nothing about what the parser turns
-  away, so this is where 318 files of the JSONTestSuite conformance corpus, two 3,000 round fuzz
-  sweeps and the behavioural tests earn their keep.
-- **Round tripping through text**, `parse (render j) = .ok j`, which needs completeness, so it is
-  property-tested and corpus-tested. `Float` is the one codec whose round trip is a property
-  rather than a theorem, since it goes through the exact decimal expansion of a bit pattern.
+- **Completeness under the strict default.** What is proved covers the configuration whose
+  limits are off. Reading that refuses a repeated name is a restriction of the grammar rather
+  than a defect, but that it refuses nothing else is not yet proved, and neither are the limits
+  on nesting and on digits. That is where 318 files of the JSONTestSuite conformance corpus, two
+  3,000 round fuzz sweeps and the behavioural tests earn their keep.
+- **Round tripping through text under the strict default**, for the same reason. `Float` is the
+  one codec whose round trip is a property rather than a theorem, since it goes through the
+  exact decimal expansion of a bit pattern.
 - **Absence of stack overflow and out-of-memory.** No theorem says a program will not run out of
   either. What is proved is that what runs is the traversal holding its work in a list; that this
   costs heap rather than stack is by construction, and evidenced by fuzzing. Two recursions sit

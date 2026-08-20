@@ -553,24 +553,24 @@ completes to the frame outside it, and the empty stack is the whole value.
 -/
 
 /-- The elements after one already read, and the closing bracket. -/
-private inductive ElementsRest : List Char → List Json → List Char → Prop where
+inductive ElementsRest : List Char → List Json → List Char → Prop where
   | close {t r} : Spec.EndArray t r → ElementsRest t [] r
   | more {t t₁ t₂ v vs r} : Spec.ValueSeparator t t₁ → Spec.Value t₁ v t₂ →
       ElementsRest t₂ vs r → ElementsRest t (v :: vs) r
 
 /-- The members after one already read, and the closing brace. -/
-private inductive MembersRest : List Char → List (String × Json) → List Char → Prop where
+inductive MembersRest : List Char → List (String × Json) → List Char → Prop where
   | close {t r} : Spec.EndObject t r → MembersRest t [] r
   | more {t t₁ t₂ m ms r} : Spec.ValueSeparator t t₁ → Spec.Member t₁ m t₂ →
       MembersRest t₂ ms r → MembersRest t (m :: ms) r
 
-private def ElementsEnd (t : List Char) (vs : List Json) (r : List Char) : Prop :=
+@[expose] def ElementsEnd (t : List Char) (vs : List Json) (r : List Char) : Prop :=
   ∃ t', Spec.Elements t vs t' ∧ Spec.EndArray t' r
 
-private def MembersEnd (t : List Char) (ms : List (String × Json)) (r : List Char) : Prop :=
+@[expose] def MembersEnd (t : List Char) (ms : List (String × Json)) (r : List Char) : Prop :=
   ∃ t', Spec.Members t ms t' ∧ Spec.EndObject t' r
 
-private theorem elementsEnd_cons {t₂ r : List Char} {vs : List Json}
+theorem elementsEnd_cons {t₂ r : List Char} {vs : List Json}
     (hrest : ElementsRest t₂ vs r) :
     ∀ {t₁ : List Char} {v : Json}, Spec.Value t₁ v t₂ → ElementsEnd t₁ (v :: vs) r := by
   induction hrest with
@@ -580,7 +580,7 @@ private theorem elementsEnd_cons {t₂ r : List Char} {vs : List Json}
     obtain ⟨t', hels, hend⟩ := ih hv₂
     exact ⟨t', Spec.Elements.more hv hsep hels, hend⟩
 
-private theorem membersEnd_cons {t₂ r : List Char} {ms : List (String × Json)}
+theorem membersEnd_cons {t₂ r : List Char} {ms : List (String × Json)}
     (hrest : MembersRest t₂ ms r) :
     ∀ {t₁ : List Char} {m : String × Json}, Spec.Member t₁ m t₂ → MembersEnd t₁ (m :: ms) r := by
   induction hrest with
@@ -591,7 +591,7 @@ private theorem membersEnd_cons {t₂ r : List Char} {ms : List (String × Json)
     exact ⟨t', Spec.Members.more hm hsep hms, hend⟩
 
 /-- What the frames still on the stack demand of the text after the value just read. -/
-private def Closes : List Frame → Json → List Char → Json → List Char → Prop
+@[expose] def Closes : List Frame → Json → List Char → Json → List Char → Prop
   | [], v, t, j, r => j = v ∧ r = t
   | .arr elems :: outer, v, t, j, r =>
       ∃ vs t', ElementsRest t vs t' ∧ Closes outer (.arr (elems.push v ++ vs.toArray)) t' j r

@@ -134,12 +134,19 @@ private def treeOf : List Nat → Json
     | 1 => .arr #[leaf n, treeOf rest]
     | _ => .obj #[(stringOf n ++ "k", leaf n), ("nested", treeOf rest)]
 
-/-- Whatever the compressed form of a value is, parsing it gives that value back. -/
+/--
+Whatever the compressed form of a value is, parsing it gives that value back. `parse_compress`
+proves this for a configuration whose limits are off; what is left to a property is the default
+reading, whose limits on nesting and on digits refuse some legal text by design.
+-/
 abbrev compressRoundTrips : Prop :=
   NamedBinder "ns" <| ∀ ns : List Nat,
     ((Json.parse (compress (treeOf ns))).toOption == some (treeOf ns)) = true
 
-/-- The laid-out form denotes the same value, so the extra space is never significant. -/
+/--
+The laid-out form denotes the same value, so the extra space is never significant. Proved as
+`parse_pretty` for a configuration whose limits are off, and property-tested for the default.
+-/
 abbrev prettyRoundTrips : Prop :=
   NamedBinder "ns" <| ∀ ns : List Nat,
     ((Json.parse (pretty (treeOf ns))).toOption == some (treeOf ns)) = true

@@ -244,6 +244,7 @@ Json/Basic.lean          constructors, instances, UniqueKeys, field and depth le
 Json/Number.lean         Number, Canonical, Eqv, Ord, bounded conversions
 Json/Spec.lean           RFC 8259 grammar as an inductive Prop
 Json/Spec/Length.lean    how much of the text each production consumes
+Json/Spec/Follow.lean    what a production can begin with, and what may follow one
 Json/Spec/Unambiguity.lean
                          one text names at most one value
 Json/Spec/Canonical.lean every number a derived value holds is canonical
@@ -253,10 +254,11 @@ Json/Parser/Soundness.lean
 Json/Parser/UniqueKeys.lean
                          strict parsing returns no object with a repeated name
 Json/Parser/Completeness.lean
-                         the other direction, per section 14; the reduction and whitespace so far
+                         the other direction: no text the grammar derives is refused
 Json/Printer.lean        compress, pretty, escaping, number rendering
 Json/Printer/Soundness.lean
                          output is JSON text, output is valid UTF-8
+Json/RoundTrip.lean      reading what was written, from the two soundness halves and completeness
 Json/FromTo.lean         ToJson / FromJson classes, instances, helpers
 Json/Query.lean          total accessors, path lookup, merge, update, the path laws
 Json/Stream.lean         IO.FS.Stream helpers
@@ -429,10 +431,12 @@ value cfg p depth stack = .ok (j, rp) →
 parse s cfg = .ok j → CanonicalNumbers j
 cfg.duplicateKeys = .reject → parse s cfg = .ok j → UniqueKeys j
 
--- completeness, per duplicate-key policy. v2, per D14
-Spec.Value bs j → parse .allow bs = .ok j
-Spec.Value bs j → UniqueKeys j  → parse .reject bs = .ok j
-Spec.Value bs j → ¬UniqueKeys j → (parse .reject bs).isError
+-- completeness. The first is proved, for a configuration whose limits are off; the other two
+-- are steps 6 and 7 of section 14
+cfg.maxDepth = none → cfg.duplicateKeys = .allow → cfg.maxNumberDigits = none →
+  Spec.TextOf s j → parse s cfg = .ok j
+Spec.TextOf s j → UniqueKeys j  → parse s strict = .ok j
+Spec.TextOf s j → ¬ UniqueKeys j → (parse s strict).isError
 
 -- the grammar transcription is unambiguous, which validates the spec itself. Proved
 Spec.Text bs j₁ → Spec.Text bs j₂ → j₁ = j₂
@@ -442,8 +446,10 @@ CanonicalNumbers j → Spec.TextOf (compress j) j
 CanonicalNumbers j → Spec.TextOf (pretty j indent) j
 s.toByteArray.IsValidUTF8
 
--- round trip, for both compress and pretty. Waits on completeness, so property-tested
-CanonicalNumbers j → parse cfg (render j) = .ok j
+-- round trip, for both compress and pretty, from the printer's soundness and completeness.
+-- Proved for a configuration whose limits are off, property-tested for the default
+CanonicalNumbers j → parse (compress j) cfg = .ok j
+CanonicalNumbers j → parse (pretty j indent) cfg = .ok j
 
 -- codecs, each from the round trip of what it contains
 fromJson? (toJson x) = .ok x
@@ -880,121 +886,103 @@ No open questions. Work deliberately postponed:
       holds across a file rather than a line apiece restating the signatures
 
 **Post-v1**
-- [ ] Completeness theorems, per D14, in the order section 14 sets out. The reduction and the
-      first scanner lemma are in `Json/Parser/Completeness.lean`
+- [x] Completeness for the permissive configuration, in the order section 14 sets out: the
+      follow-condition module, scanner maximality, the leaf converses, the value family split
+      into first and rest, the machine, and the entry point. The round trip follows from it
+- [ ] Completeness for the two duplicate-key statements, and the two limits as side conditions,
+      which are steps 6 and 7 of section 14
 
 ## 14. Completeness
 
-The one substantive claim still unproved, and the last thing standing between the corpus and
-the sentence "no false rejects". What follows is the shape of the work, written before any of it
-beyond the first two lemmas in `Json/Parser/Completeness.lean`.
+No text the grammar derives is refused. Proved for the permissive configuration; the two
+duplicate-key statements and the two limits are what remains, and are set out at the end.
 
-### What is to be proved
-
-Three statements, one per duplicate-key policy, each about the permissive configuration. The
-knobs that refuse legal text are separated out below rather than carried through the induction.
+### What is proved
 
 ```lean
--- `strict` is `permissive` with `duplicateKeys := .reject`, and `permissive` is
--- `{ duplicateKeys := .allow, maxDepth := none, maxNumberDigits := none }`
-Spec.TextOf s j → parse s permissive = .ok j
-Spec.TextOf s j → UniqueKeys j → parse s strict = .ok j
-Spec.TextOf s j → ¬ UniqueKeys j → (parse s strict).isError
+-- `Json/Parser/Completeness.lean`
+cfg.maxDepth = none → cfg.duplicateKeys = .allow → cfg.maxNumberDigits = none →
+  Spec.TextOf s j → parse s cfg = .ok j
 ```
 
-`maxDepth` and `maxNumberDigits` then come back as side conditions. Depth is a claim about the
-value, `Json.depth j ≤ limit`, and the parser's counter has to be tied to it. The digit limit is
-not a claim about the value at all, since `1e2` and `100` denote the same number and one is
-longer: it is a claim about the text, so it needs a predicate over the derivation rather than
-over `j`, and it is the one place where the statement gets uglier than the theorem it proves.
+The three hypotheses are the knobs that refuse legal text by design, and nothing else is
+assumed: in particular the byte order mark needs no hypothesis in either direction, because no
+derivable text begins with one. That is `head_ne_bom`, and it is why the theorem holds with
+`ignoreBOM` at its default.
 
-The byte order mark needs no hypothesis in either direction. `ignoreBOM` only fires when the
-first character is `U+FEFF`, and no derivable text begins with one: whitespace cannot take it,
-and no alternative of `Value` starts with it. That is a short lemma about the head of a value,
-and it makes completeness hold for the default configuration as well as for `ignoreBOM := false`.
+`Json/RoundTrip.lean` composes it with the printer's soundness, which retires a property:
 
-### The reduction that shrinks it
+```lean
+CanonicalNumbers j → parse (compress j) cfg = .ok j
+CanonicalNumbers j → parse (pretty j indent) cfg = .ok j
+```
 
-`parse_eq_of_isOk` is already proved, and it is the reason the induction never has to carry a
-value:
+### The two reductions that shrank it
+
+`parse_eq_of_isOk` is why the induction never carries a value:
 
     Spec.TextOf s j → (parse s cfg).isOk → parse s cfg = .ok j
 
 Soundness says whatever comes back is a value the text derives, and `Spec.text_unique` says the
-text derives one. So the whole remaining obligation is that a derivable text is never refused.
-Nothing has to be said about what is returned, only that something is.
+text derives one, so the whole obligation is that a derivable text is never refused. In the end
+the machine induction states the position too, since the caller needs it, but nothing has to be
+said about which value is returned.
 
-### What the scanners need that soundness did not
-
-Soundness relates a scanner to a derivation in the easy direction: what `skipWs` passed over,
-`Ws` derives. Completeness needs the converse, and the converse is false without maximality,
+The second is the follow conditions. Soundness relates a scanner to a derivation in the easy
+direction: what `skipWs` passed over, `Ws` derives. The converse is false without maximality,
 because `Ws` relates a text to every one of its whitespace-suffixes while the scanner lands on
-exactly one. Each scanner therefore needs a second lemma, about what it *leaves*:
+exactly one. Each scanner therefore has a second lemma about what it *leaves*: `noWs_skipWs`,
+`noDigit_digits`. With those, the leaf converses go through the uniqueness lemmas in
+`Json/Spec/Unambiguity.lean` rather than through fresh arithmetic, comparing a derivation
+against the scanner's own soundness derivation. That machinery was private, and moving it to
+`Json/Spec/Follow.lean` is what made it usable twice.
 
-- `noWs_skipWs`, proved: whitespace stops at a character that is not whitespace, or at the end.
-- the same for `digits`, `intPart`, `fracPart`, `expPart`: what is left starts with no digit, no
-  decimal point, no `e`.
-- the same for `string`: what is left is the closing quotation mark.
+### Whitespace is why the conclusion is `Ws` and not equality
 
-With those, the leaf converses need no new arithmetic. The uniqueness lemmas inside
-`Json/Spec/Unambiguity.lean` already say that two derivations from one text with the same follow
-condition agree, so the derivation and the scanner's own soundness derivation can be compared
-directly. That is the second reduction, and it is worth as much as the first.
+A token in the grammar carries the whitespace on both sides of it, while the scanner passes over
+whitespace only when it next looks at the text. So a derivation can have consumed more than the
+parser has, and the machine's conclusion is `Ws (remaining rp) r` rather than
+`remaining rp = r`. The hypothesis side is the mirror of that: `ContinueComplete` takes
+`Ws (remaining p) t` rather than `remaining p = t`, which is what lets a caller hand it a
+position short of where the derivation had reached. `Ws.to_noWs` is the lemma that does the
+work, and `NoWs (remaining p)` is carried through the two functions that are only ever called
+after `skipWs`.
 
-It has a prerequisite. Most of that machinery is `private`: `NoDigit`, `NoFrac`, `NoExp`, `NoCh`,
-`digits_head`, `int_head`, `num_head`, `str_head`, and the lemmas relating `Follows` to them.
-They need to move to a module both proofs can import, `Json/Spec/Follow.lean` beside
-`Json/Spec/Length.lean`. `NoWs` and `Follows` are `@[expose]` as of this section, which is the
-smallest version of that move.
+### What the machine looks like
 
-### What the machine needs
-
-The mirror of `Closes`, and the same induction. `Closes` is already a relation between a stack, a
-value, and texts, so completeness reads it as a hypothesis where soundness produced it as a
-conclusion:
+The mirror of `Closes`, and the same length induction. `Closes` was already a relation between a
+stack, a value and texts, so completeness reads it as a hypothesis where soundness produced it as
+a conclusion:
 
 ```lean
-Spec.Value (remaining p) v t → Closes stack v t j r →
-  ∃ rp, value cfg p depth stack = .ok (j, rp) ∧ remaining rp = r
+Spec.Value (remaining p) v t → Spec.Follows t → Closes stack v t j r →
+  ∃ rp, value cfg p depth stack = .ok (j, rp) ∧ Spec.Ws (remaining rp) r
 ```
 
-Positions are the bookkeeping. Soundness maps a position to text with `remaining`; completeness
-has to produce the position, which the existential above does without needing `remaining` to be
-injective.
+`Follows t` is the one hypothesis that was not foreseen. A number's remainder has to be pinned
+down before `num_unique` applies, and at the top of the stack nothing else supplies it;
+`elementsRest_follows` and `membersRest_follows` supply it everywhere else, since what follows a
+value inside a container is a separator or a closing bracket.
 
-Constructing the stack is the part with no counterpart in the soundness proof. An `Arr`
-derivation gives `Elements` for the whole array, and the machine wants the first value's
-derivation and an `ElementsRest` for what follows; that is `elementsEnd_cons` run backwards, and
-it is a short induction. `Json/Spec/Length.lean` supplies the measure, since `induction` will not
-take the mutual value family apart and the same length induction that carries unambiguity
-carries this.
+Two other things carried the proof. The parser dispatches on one character, so each branch of
+`value`, `continueWith` and `member` is unfolded once, in a lemma of its own, and the induction is
+then driven by the derivation rather than by the parser. And `Elements` and `Members` come apart
+into a first and a rest by induction on the length of the text, since `induction` will not take
+the mutual value family apart.
 
-### Order, and what each part is worth
+### What remains
 
-1. Extract the follow-condition machinery into `Json/Spec/Follow.lean`. Mechanical, and nothing
-   is proved twice afterwards.
-2. Maximality for each scanner. Independent of each other, and each is the size of `noWs_skipWs`.
-3. The leaf converses, through the uniqueness lemmas rather than through fresh arithmetic.
-4. The value family: `Elements` and `Members` decomposed into first-plus-rest.
-5. The machine induction, permissive configuration, `.allow`.
-6. The two `.reject` statements, which need what `Json/Parser/UniqueKeys.lean` proves about
-   `seen`, read in the other direction: a name absent from the value is absent from the set.
-7. The side conditions for `maxDepth` and `maxNumberDigits`.
-
-Steps 1 to 3 are worth landing on their own even if the rest stalls, since they are what a
-second attempt would otherwise repeat.
-
-### Risks
-
-- **The string scanner.** Escapes and surrogate pairs are where the leaf converse has the most
-  cases, and where the derivation carries an equation about code points rather than a structural
-  fact. This is the part most likely to be larger than it looks.
-- **The digit limit.** The statement, not the proof. If a predicate over the derivation reads
-  badly, the honest fallback is to prove completeness for `maxNumberDigits := none` and say in
-  the README that the default trades a class of legal texts for a bound on work, which is what
-  it does.
-- **Size.** Soundness is 893 lines and unambiguity 1036. This is of that order, and the estimate
-  is 800 to 1000 new lines plus the extraction. It is not an increment.
+6. The two `.reject` statements. `Json/Parser/UniqueKeys.lean` proves that the frame's `seen`
+   set holds every name in the frame's fields; completeness needs the converse, that it holds
+   nothing else, and needs the final value's distinct names carried back down the `Closes` chain
+   to the object being built. Both are invariants threaded through all three of the machine's
+   predicates, so this is of the same order as the machine itself.
+7. The two limits as side conditions. Depth is a claim about the value, `Json.depth j ≤ limit`,
+   and the parser's counter has to be tied to it. The digit limit is not a claim about the value
+   at all, since `1e2` and `100` denote the same number and one is longer: it is a claim about
+   the text, so it needs a predicate over the derivation. If that reads badly the honest fallback
+   is to leave it where it is and say in the README that the default trades a class of legal
+   texts for a bound on work, which is what it does.
 
 ## 15. References
 
