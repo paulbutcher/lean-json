@@ -6,6 +6,7 @@ import Lake
 open Lake DSL
 
 package json where
+  version := v!"0.1.0"
   leanOptions := #[⟨`warningAsError, true⟩]
 
 @[default_target]

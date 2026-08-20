@@ -11,11 +11,18 @@ literal syntax need the frontend to elaborate, so they live in a companion packa
 
 ## Installing
 
-```lean
-require json from git "https://github.com/paulbutcher/lean-json.git" @ "main"
+In `lakefile.toml`:
 
--- optional, for `deriving ToJson, FromJson` and `json%`
-require jsonDeriving from git "https://github.com/paulbutcher/lean-json.git" @ "main" / "deriving"
+```toml
+[[require]]
+name = "json"
+git = "https://github.com/paulbutcher/lean-json.git"
+
+# optional, for `deriving ToJson, FromJson` and `json%`
+[[require]]
+name = "jsonDeriving"
+git = "https://github.com/paulbutcher/lean-json.git"
+subDir = "deriving"
 ```
 
 ## Reading and writing
