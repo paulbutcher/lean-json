@@ -190,6 +190,31 @@ Not proved, and covered by tests instead:
 - `Number.toFloat` against IEEE 754, and the `Float` codec's round trip, which goes through the
   exact decimal expansion of a bit pattern.
 
+## Differences vs `Lean.Data.Json`
+
+Each row below was measured against it on Lean v4.33.0, and each is pinned by a test here.
+
+| Input | `Lean.Data.Json` | `lean-json` |
+|---|---|---|
+| ten million nested arrays | `Stack overflow detected. Aborting.`, SIGABRT, exit 134, and uncatchable: the parser recurses on the C stack. A million deep survives, so where the cliff falls is a property of the stack the process happens to have rather than of the input | `.depthExceeded`, an error you can catch, or the value itself if `maxDepth` is `none`. Nesting costs heap and never stack, so the depth a reading survives is a matter of memory |
+| `1e1000000000` | does not return: the exponent is evaluated as `10 ^ 1000000000` into a bignum | a `Number` with `exponent := 1000000000`, held and written back in constant time |
+| `"\ud800"` | becomes `U+FFFD`. Corruption, silently, with no error to catch | `.loneSurrogate` |
+| `{"a":1,"a":2}` | last wins, silently, with no way to ask for a refusal | refused by default, `.allow` to keep both |
+| `{"z":1,"m":2,"a":3,"q":4}` | comes back as `z, q, m, a`: an object is a `Std.TreeMap.Raw`, so the order it was written in is gone and so is any repeated name | the order it was written in, and a repeated name if there was one |
+| printing something deeply nested | `render`, which `pretty` goes through, is `partial` and recursive, so writing a value can overflow where reading it did not | one work-stack traversal, proved to be the one that runs |
+| comparing or hashing something deeply nested | `beq'` and `hash'` are `partial` and recursive too | as above, for all five whole-value operations |
+| `setObjVal! (num 1) "a" null` | panics | `setObjVal?`, which returns `Except String Json` |
+| `toJson (1e-300 : Float)` | `0`, as is every magnitude below about `1e-7`: the encoder reads back `Float.toString`, which is fixed point, so the digits were never there. That same path calls `panic!` if the read fails | the exact decimal expansion of the bit pattern |
+| `⟨15, 1⟩` against `⟨150, 2⟩`, two spellings of `1.5` where a number is `mantissa / 10 ^ exponent` | `==` is `false`, `compare` is `.eq`, and the hashes differ: a `BEq` and an `Ord` on one type that contradict each other | one canonical value per number, so `==`, `compare` and `hash` agree on everything a parse returns |
+
+None of this is exotic input. A repeated name is what broke CouchDB in 2017
+([CVE-2017-12635](https://docs.couchdb.org/en/stable/cve/2017-12635.html)): its JavaScript and
+Erlang parsers resolved `{"roles":[],"roles":["_admin"]}` differently, so the write was authorised
+against one of the two and every later request was authorised against the other, which let any
+user make themselves an admin. Deep nesting and a long exponent are what a request body carries
+when someone is looking for a way to take a service down, and a process that aborts on `SIGABRT`
+cannot log, retry or return a 400.
+
 ## Speed
 
 `bench/` times reading and writing beside `Lean.Data.Json` on the same text. Numbers from one
