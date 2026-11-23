@@ -6,7 +6,7 @@ import Lake
 open Lake DSL
 
 package bench where
-  version := v!"0.3.1"
+  version := v!"0.4.0"
   leanOptions := #[⟨`warningAsError, true⟩]
 
 require json from ".."
