@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.4.0] - 2026-11-23
+
+* Breaking: requires Lean 4.36.0; move to `leanprover/lean4:v4.36.0` to use this release.
+
 ## [0.3.1] - 2026-10-18
 
 * Chore: bump dependencies
